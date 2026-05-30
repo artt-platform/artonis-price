@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.venv/
+venv/
+node_modules/
+*.log
+.env
+.env.local
+data/cron.log
+data/cron.stdout.log
+data/cron.stderr.log
+data/backups/
+data/*.sqlite-journal
+/tmp/inv_cookie.txt
