@@ -249,7 +249,27 @@ _PRINT_MEDIUM_KWS = (
     "etching", "eau-forte", "aquatint", "aquatinte",
     "woodcut", "linocut", "monotype",
     "pochoir",
+    "reproduction sur",     # "reproduction sur soie/papier" = copy on silk/paper
+    "reproduction en couleur",
+    "tirage",
+    "impression sur",       # "impression sur soie/papier" = print on silk/paper
+    "impression en couleur", # "Impression en couleurs sur soie" — variant phrasing
+    "imprimé sur", "imprime sur",
+    "giclée", "giclee",
 )
+# Title hints that flag a lot as print/reproduction even when medium says otherwise
+_TITLE_PRINT_KWS = (
+    "d'après", " dapres", "after mai thu", "after le pho",
+    "édition limitée", "édition de", "numbered",
+    "limited edition", "epreuve d'artiste", "épreuve",
+    "print on silk", "print on paper",
+    "impression sur soie", "impression sur papier",
+    "tirage limité", "tirage de tête",
+    "exemplaire numéroté",
+)
+# Edition fraction "342/450" — only flag as print if denom ≥100 (avoids dates like 05/03)
+_EDITION_NUM_RE = re.compile(r'\b\d{1,3}\s*/\s*\d{3,4}\b')
+
 _SCULPTURE_MATERIAL_KWS = (
     "bronze", "terracotta", "terre cuite", "terre-cuite",
     "marbre", "marble", "grès", "cuivre", "fonte",
@@ -260,6 +280,38 @@ _SCULPTURE_MATERIAL_KWS = (
 )
 _TITLE_SCULPTURE_KWS = ("tượng",)
 
+# Medals / commemorative objects — distinct from sculpture and from fine art
+_MEDAL_KWS = (
+    "medal", "medallion", "médaille", "medaille",
+    "issued by unesco", "commemorative coin",
+)
+
+# 3D lacquer OBJECTS only — 2D paravents (folding screens) keep kind=painting
+# since their painted surface is measurable for $/m².
+_LACQUER_OBJECT_KWS = (
+    "shallow dish", "lacquer dish", "lacquer box", "music box",
+    "cigar box", "cigar and music",
+    "lacquer cabinet",
+    "boîte en laque", "boite en laque",
+    "coupe en laque", "plat en laque",
+)
+
+# Drawings / sketches / works on paper sets — different market from finished oil/silk paintings
+_DRAWING_KWS = (
+    "set of two drawings", "set of three drawings", "set of four drawings",
+    "set of five drawings", "set of six drawings", "set of seven drawings",
+    "set of 6 drawings", "set of 7 drawings", "set of 8 drawings", "set of 10 drawings",
+    "drawings with", "180 sketches", "set of sketches",
+    "ink drawing", "pencil drawing", "pencil sketch",
+    "dessin à l'encre", "dessin au crayon",
+    "carnet de croquis", "carnet de dessins",
+    "deux dessins", "trois dessins", "quatre dessins",
+    "two drawings", "three drawings", "four drawings", "five drawings", "six drawings",
+    "ensemble de deux dessins", "ensemble de trois dessins", "ensemble de quatre dessins",
+    "ensemble de cinq dessins", "ensemble de six dessins",
+    "étude préparatoire", "etude préparatoire",
+)
+
 
 _EXPLICIT_SCULPTURE_KWS = ("sculpture", "sculpté", "carved", "statuette", "buste en bronze",
                            "buste en plâtre", "tượng", "modelé en", "molded plaster")
@@ -267,28 +319,42 @@ _EXPLICIT_SCULPTURE_KWS = ("sculpture", "sculpté", "carved", "statuette", "bust
 
 def classify_kind(medium, title):
     """Classify a sale_result as one of:
-       'painting' (default 2D, includes works on paper/silk/canvas/lacquer)
-       'sculpture' (3D works in bronze/terracotta/marble/stone/etc.)
-       'print'    (lithograph/etching/screenprint/woodcut — multiples).
-    Order matters:
-      1. Explicit sculpture markers (sculpture/sculpté/carved) — beats 2D kws on mixed mediums.
-      2. Print medium → print (before painting because prints are on paper).
-      3. Painting medium → painting.
-      4. Sculpture material in medium/title → sculpture.
-      5. Default → painting.
-    Future kinds (installation/performance/video) aren't auto-detected — set
-    explicitly on the lot or via artist override; reserved here so callers can
-    pass them through.
+       'painting' (default 2D — works on paper/silk/canvas/lacquer/panel/etc.)
+       'sculpture' (3D works in bronze/terracotta/marble/stone; includes 3D lacquer objects)
+       'print'    (lithograph/etching/edition-numbered reproductions — multiples)
+       'drawing'  (sketch/multi-piece works on paper — no canonical single dim)
+       'medal'    (commemorative coins/medals — distinct market)
+    Order matters: most-specific first so a lacquer box doesn't get tagged as
+    painting just because "laqué" matches.
     """
     m = (medium or "").lower()
     t = (title or "").lower()
     blob = m + " " + t
+    # 1) Medals / commemorative objects — keep separate from fine art
+    for kw in _MEDAL_KWS:
+        if kw in blob:
+            return "medal"
+    # 2) Explicit sculpture/3D markers — including 3D lacquer-objects (boxes, dishes)
     for kw in _EXPLICIT_SCULPTURE_KWS:
         if kw in blob:
             return "sculpture"
+    for kw in _LACQUER_OBJECT_KWS:
+        if kw in blob:
+            return "sculpture"
+    # 3) Drawing / sketch sets — multi-piece works on paper, no canonical single dim
+    for kw in _DRAWING_KWS:
+        if kw in t:
+            return "drawing"
+    # 4) Print: medium keyword OR title indicates reproduction
     for kw in _PRINT_MEDIUM_KWS:
         if kw in m:
             return "print"
+    for kw in _TITLE_PRINT_KWS:
+        if kw in t or kw in m:
+            return "print"
+    # Edition number fraction "342/450" — only treat as print if denom ≥100
+    if _EDITION_NUM_RE.search(blob):
+        return "print"
     for kw in _PAINTING_MEDIUM_KWS:
         if kw in m:
             return "painting"
@@ -304,6 +370,35 @@ def classify_kind(medium, title):
     return "painting"
 
 
+# Support-type detection: physical material the work is on. Determines $/m² peer group
+# for fair comparison (canvas vs silk vs paper vs lacquer have very different markets).
+# Order = priority: lacquer first because "huile sur panneau LAQUÉ" should be lacquer not panel.
+# Keywords use regex char class for accents (laqu[eéèê] matches laque/laqué/laquée).
+_SUPPORT_PATTERNS = [
+    ("lacquer", [(r"laqu[eéèê]", False), (r"lacquer", False),
+                 (r"sơn mài", False), (r"son mai", False)]),
+    ("silk",    [(r"silk", True), (r"soie", True), (r"lụa", True)]),
+    ("canvas",  [(r"canvas", True), (r"toile", True), (r"vải", True)]),
+    ("paper",   [(r"paper", True), (r"papier", True), (r"giấy", True),
+                 (r"vélin", True), (r"arches", True)]),
+    ("panel",   [(r"panel", True), (r"panneau", True), (r"carton", True), (r"board", True),
+                 (r"bois", True), (r"isorel", True), (r"masonite", True)]),
+    ("metal",   [(r"plate", True), (r"plaque", True), (r"métal", True), (r"metal", True),
+                 (r"copper", True), (r"cuivre", True)]),
+]
+
+
+def detect_support_type(medium, title):
+    """Return support_type slug or None when nothing matches."""
+    blob = ((medium or "") + " " + (title or "")).lower()
+    for support, kws in _SUPPORT_PATTERNS:
+        for kw, use_boundary in kws:
+            pattern = (r"\b" + kw + r"\b") if use_boundary else kw
+            if re.search(pattern, blob):
+                return support
+    return None
+
+
 def insert_sale_result(conn, record):
     """Upsert a sale_result row. record must contain at minimum: source, source_url, artist_name_raw.
     artist_id is resolved via upsert_artist if artist_name_raw is provided."""
@@ -314,8 +409,9 @@ def insert_sale_result(conn, record):
     dims = record.get("dimensions", "")
     kind = classify_kind(record.get("medium", ""), record.get("artwork_title", ""))
     # Sculptures don't have meaningful 2D area — keep w/h pairs as parsed but null out area+ppm
+    # Prints/drawings/medals get dim+area kept but $/m² nulled later (different market).
     w, h, area, _ = compute_area_and_price_per_m2(dims, record.get("hammer_price") or 0)
-    if kind == "sculpture":
+    if kind in ("sculpture", "medal"):
         w, area = None, None
 
     # Hammer price in USD (this is what market benchmarks use)
@@ -336,9 +432,13 @@ def insert_sale_result(conn, record):
         except Exception:
             premium_usd = None
     # $/m² uses premium-inclusive price (the "real" price buyer paid).
-    # Sculptures: no area_m2 → no $/m² (set to None).
+    # Sculptures/prints/drawings/medals: $/m² doesn't reflect market value → set None.
     ppm_basis = premium_usd if premium_usd is not None else price_usd
     ppm_usd = round(ppm_basis / area, 2) if (ppm_basis and area) else None
+    if kind in ("print", "drawing", "medal", "sculpture"):
+        ppm_usd = None
+
+    support_type = detect_support_type(record.get("medium", ""), record.get("artwork_title", ""))
 
     conn.execute(
         """
@@ -347,8 +447,8 @@ def insert_sale_result(conn, record):
             artist_id, artist_name_raw, artwork_title, medium, dimensions,
             width_cm, height_cm, area_m2, year,
             estimate_low, estimate_high, hammer_price, price_with_premium, currency,
-            price_usd, price_with_premium_usd, price_per_m2_usd, status, provenance, raw_snapshot, scraped_at, kind
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            price_usd, price_with_premium_usd, price_per_m2_usd, status, provenance, raw_snapshot, scraped_at, kind, support_type
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.get("source", ""),
@@ -378,5 +478,6 @@ def insert_sale_result(conn, record):
             record.get("raw_snapshot", ""),
             now_iso(),
             kind,
+            support_type,
         ),
     )
