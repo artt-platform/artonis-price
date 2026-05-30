@@ -1757,6 +1757,102 @@ def build_report(conn):
          order by (s.price_per_m2_usd / a.overall_median_per_m2_usd) desc
          limit 100""")
 
+    # 9w) Suspicious / potentially-forged lots. Flag if either:
+    #  - $/m² < 30% of artist's median FOR THE SAME SUPPORT (canvas/silk/paper/lacquer/panel)
+    #    → fair apples-to-apples comparison (e.g. Le Pho silk vs Le Pho silk median, not vs overall)
+    #  - Title/medium/provenance contains attribution caveats (attribué à, école de, …)
+    # Filter sale_date >= 2018-01-01 because Indochine market boom started ~2017-18 —
+    # comparing 2010 sales against 2025 medians yields false positives.
+    suspicious_lots = rows(
+        """with support_med as (
+             select s.artist_id, s.support_type,
+                    cast(avg(case when rn = (cnt+1)/2 or rn = cnt/2+1 then price_per_m2_usd end) as real) as med
+             from (
+               select artist_id, support_type, price_per_m2_usd,
+                      row_number() over (partition by artist_id, support_type order by price_per_m2_usd) as rn,
+                      count(*) over (partition by artist_id, support_type) as cnt
+               from sale_results
+               where kind='painting' and price_per_m2_usd > 0 and price_per_m2_usd < 50000000
+                 and support_type is not null and artist_id is not null
+             ) s
+             where s.cnt >= 3
+             group by s.artist_id, s.support_type, s.cnt
+           )
+           select s.id, s.source, s.source_url, s.sale_date, s.artwork_title,
+                  s.dimensions, s.medium, s.provenance, s.kind, s.support_type,
+                  s.estimate_low, s.estimate_high, s.currency,
+                  coalesce(a.display_name, a.name) as artist_name, a.id as artist_id,
+                  coalesce(s.price_with_premium_usd, s.price_usd) as price_usd,
+                  s.price_per_m2_usd,
+                  coalesce(sm.med, a.overall_median_per_m2_usd) as median_ppm,
+                  round(100.0 * s.price_per_m2_usd / coalesce(sm.med, a.overall_median_per_m2_usd), 0) as pct_of_median,
+                  case when sm.med is not null then s.support_type else 'overall' end as median_basis,
+                  case
+                    when lower(coalesce(s.artwork_title,'') || ' ' || coalesce(s.medium,'')) glob '*attribu*' then 'attribué/attributed'
+                    when lower(coalesce(s.artwork_title,'') || ' ' || coalesce(s.medium,'')) glob '*école de *' then 'école de'
+                    when lower(coalesce(s.artwork_title,'') || ' ' || coalesce(s.medium,'')) glob '*manière de*' then 'manière de'
+                    when lower(coalesce(s.artwork_title,'') || ' ' || coalesce(s.medium,'')) glob '*studio of*' then 'studio of'
+                    when lower(coalesce(s.artwork_title,'') || ' ' || coalesce(s.medium,'')) glob '*manner of*' then 'manner of'
+                    when lower(coalesce(s.artwork_title,'') || ' ' || coalesce(s.medium,'')) glob '*circle of*' then 'circle of'
+                    else 'price_anomaly'
+                  end as flag_reason
+             from sale_results s
+             join artists a on a.id = s.artist_id
+             left join support_med sm on sm.artist_id = s.artist_id and sm.support_type = s.support_type
+            where s.kind = 'painting' and s.status = 'sold'
+              and s.price_per_m2_usd > 0 and s.area_m2 >= 0.05
+              and a.overall_median_per_m2_usd > 0 and a.auction_count >= 5
+              and coalesce(s.price_with_premium_usd, s.price_usd) >= 1000
+              and s.sale_date >= '2018-01-01'
+              and a.display_name in (
+                'Lê Phổ','Mai Trung Thứ','Vũ Cao Đàm','Bùi Xuân Phái','Nguyễn Gia Trí',
+                'Nguyễn Phan Chánh','Tô Ngọc Vân','Lê Thị Lựu','Phạm Hậu',
+                'Joseph Inguimberty','Alix Aymé','Lương Xuân Nhị','Phạm Văn Đôn',
+                'Hoàng Tích Chù','Trần Văn Cẩn','Nguyễn Sang','Nguyễn Tư Nghiêm','Lê Bá Đảng'
+              )
+              and (
+                (s.price_per_m2_usd / coalesce(sm.med, a.overall_median_per_m2_usd)) <= 0.30
+                or s.artwork_title like '%attribu%'
+                or s.artwork_title like '%école de %'
+                or s.artwork_title like '%manière de%'
+                or s.artwork_title like '%studio of%'
+                or s.artwork_title like '%manner of%'
+                or s.artwork_title like '%circle of%'
+              )
+         order by (s.price_per_m2_usd / coalesce(sm.med, a.overall_median_per_m2_usd)) asc
+         limit 100""")
+
+    # Median $/m² per (artist, year) — for top 6 Indochine masters.
+    # Lets users see historical price progression (Lê Phổ 2010 ≠ Lê Phổ 2024).
+    yearly_median_per_artist = rows(
+        """with top_artists as (
+             select id, coalesce(display_name, name) as name
+             from artists
+             where display_name in ('Lê Phổ','Mai Trung Thứ','Vũ Cao Đàm','Bùi Xuân Phái',
+                                    'Nguyễn Gia Trí','Lê Thị Lựu')
+           ),
+           yr as (
+             select s.artist_id, t.name as artist_name,
+                    cast(substr(s.sale_date, 1, 4) as integer) as yr,
+                    s.price_per_m2_usd
+             from sale_results s join top_artists t on t.id = s.artist_id
+             where s.kind='painting' and s.price_per_m2_usd > 0
+               and s.price_per_m2_usd < 50000000
+               and s.sale_date >= '2010-01-01'
+           ),
+           ranked as (
+             select artist_id, artist_name, yr, price_per_m2_usd,
+                    row_number() over (partition by artist_id, yr order by price_per_m2_usd) as rn,
+                    count(*) over (partition by artist_id, yr) as cnt
+             from yr
+           )
+           select artist_id, artist_name, yr, cnt as n,
+                  round(avg(case when rn = (cnt+1)/2 or rn = cnt/2+1 then price_per_m2_usd end)) median_ppm
+           from ranked
+           group by artist_id, artist_name, yr, cnt
+           having cnt >= 2
+           order by artist_name, yr""")
+
     # 9z) Momentum — estimate-vs-hammer ratio per artist. Hammer significantly above
     # the midpoint estimate signals heating market; below = cooling. Need ≥3 lots
     # with full estimate data for the stat to mean anything.
@@ -1870,6 +1966,8 @@ def build_report(conn):
         "medium_benchmark": medium_benchmark,
         "bargain_lots": bargain_lots,
         "premium_lots": premium_lots,
+        "suspicious_lots": suspicious_lots,
+        "yearly_median_per_artist": yearly_median_per_artist,
         "lots_missing_date": lots_missing_date,
         "lots_missing_dim": lots_missing_dim,
         "artist_gaps": artist_gaps,
@@ -2108,6 +2206,29 @@ HTML = r"""<!doctype html>
     .kind-badge { display:inline-block; font-size:10px; font-weight:500; padding:2px 7px; border-radius:6px; vertical-align:middle; margin-left:6px; }
     .kind-badge.house { background:#dcfce7; color:#166534; }
     .kind-badge.platform { background:#fef3c7; color:#92400e; }
+    /* Kind pill — non-painting types in sales/lot tables */
+    .kind-pill { display:inline-block; font-size:10px; font-weight:600; padding:2px 7px; border-radius:4px; vertical-align:middle; letter-spacing:0.2px; white-space:nowrap; }
+    .kind-pill.kind-sculpture { background:#fde7d4; color:#9a4a16; }
+    .kind-pill.kind-print     { background:#dbeafe; color:#1e40af; }
+    .kind-pill.kind-drawing   { background:#f3e8ff; color:#6b21a8; }
+    .kind-pill.kind-medal     { background:#fef3c7; color:#92400e; }
+    /* Support filter chips on artist price chart */
+    .support-chips { display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 12px; }
+    .support-chips .chip { padding:5px 12px; border:1px solid var(--line); background:#fff; border-radius:999px; font-size:12px; font-weight:500; color:var(--ink); cursor:pointer; transition:all 0.15s; }
+    .support-chips .chip:hover { background:var(--bg); }
+    .support-chips .chip.active { background:var(--ink); color:#fff; border-color:var(--ink); }
+    /* Suspicious lots block — full-width dedicated section */
+    .report-block-fullwidth { display:block; }
+    .report-block-fullwidth .report-card { background:#fff; border:1px solid #fecaca; border-left:3px solid #dc2626; overflow-x:auto; padding:18px 22px; }
+    .report-block-fullwidth .report-table { table-layout:fixed; min-width:1500px; width:1500px; }
+    .report-block-fullwidth .report-table td, .report-block-fullwidth .report-table th { vertical-align:top; padding:10px 8px; }
+    .report-block-fullwidth .report-table th.sus-col-artist, .report-block-fullwidth .report-table td.sus-col-artist { width:140px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .report-block-fullwidth .report-table th.sus-col-title, .report-block-fullwidth .report-table td.sus-col-title { width:auto; min-width:380px; white-space:normal; word-wrap:break-word; }
+    .report-block-fullwidth .report-table th.sus-col-narrow, .report-block-fullwidth .report-table td.sus-col-narrow { width:80px; white-space:nowrap; }
+    .report-block-fullwidth .report-table th.sus-col-dim, .report-block-fullwidth .report-table td.sus-col-dim { width:120px; white-space:nowrap; }
+    .report-block-fullwidth .report-table th.sus-col-date, .report-block-fullwidth .report-table td.sus-col-date { width:100px; white-space:nowrap; }
+    .report-block-fullwidth .report-table th.sus-col-num, .report-block-fullwidth .report-table td.sus-col-num { width:120px; white-space:nowrap; text-align:right; }
+    .report-block-fullwidth .report-table th.sus-col-flag, .report-block-fullwidth .report-table td.sus-col-flag { width:120px; white-space:nowrap; }
     .role-badge { display:inline-block; font-size:13px; font-weight:500; padding:3px 10px; border-radius:999px; background:var(--green-soft); color:var(--green); vertical-align:middle; margin-left:10px; font-family:Inter; }
     /* Inline role pill for artist list rows — smaller and per-role colour */
     .role-pill { display:inline-block; font-size:10px; font-weight:600; padding:2px 7px; border-radius:4px; vertical-align:middle; margin-left:6px; letter-spacing:0.2px; white-space:nowrap; }
@@ -2229,6 +2350,101 @@ function artistRole(a){
 function text(v){ return (v ?? "").toString(); }
 function esc(v){ return text(v).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
+// Distinct color per top artist for the yearly-median multi-line chart
+const ARTIST_COLOR = {
+  'Lê Phổ':         '#dc2626',
+  'Mai Trung Thứ':  '#2563eb',
+  'Vũ Cao Đàm':     '#16a34a',
+  'Bùi Xuân Phái':  '#9333ea',
+  'Nguyễn Gia Trí': '#ea580c',
+  'Lê Thị Lựu':     '#0891b2',
+};
+function colorForArtist(name){ return ARTIST_COLOR[name] || '#64748b'; }
+
+// Multi-line chart: median $/m² per top artist over years (log Y because $30K-$2.8M range).
+function buildYearlyMedianChart(byArtist, opts){
+  opts = opts || {};
+  const W = opts.width || 920;
+  const H = opts.height || 380;
+  const PAD_L = opts.isPreview ? 50 : 80;
+  const PAD_R = opts.isPreview ? 12 : 30;
+  const PAD_T = 24;
+  const PAD_B = opts.isPreview ? 30 : 44;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+
+  const allPts = [];
+  Object.entries(byArtist).forEach(([name, arr]) => {
+    arr.forEach(p => allPts.push({ artist: name, yr: p.yr, v: p.median_ppm, n: p.n }));
+  });
+  if (allPts.length < 2) return '';
+
+  const years = allPts.map(p => p.yr);
+  const yMin = Math.min(...years), yMax = Math.max(...years);
+  const vals = allPts.map(p => p.v).filter(v => v > 0);
+  if (vals.length < 2) return '';
+  const vMin = Math.max(1, Math.min(...vals));
+  const vMax = Math.max(...vals);
+  const logMin = Math.log10(vMin), logMax = Math.log10(vMax);
+
+  const xScale = y => yMax === yMin ? PAD_L + plotW/2
+    : PAD_L + ((y - yMin) / (yMax - yMin)) * plotW;
+  const yScale = v => PAD_T + plotH - ((Math.log10(Math.max(v, 1)) - logMin) / (logMax - logMin || 1)) * plotH;
+
+  const span = yMax - yMin;
+  const step = Math.max(1, Math.ceil(span / (opts.isPreview ? 5 : 10)));
+  const xTicks = [];
+  for (let y = yMin; y <= yMax; y += step) xTicks.push(y);
+  if (xTicks[xTicks.length - 1] !== yMax) xTicks.push(yMax);
+
+  const yTicks = [];
+  for (let exp = Math.floor(logMin); exp <= Math.ceil(logMax); exp++) {
+    const base = Math.pow(10, exp);
+    [1, 3].forEach(m => {
+      const v = base * m;
+      if (v >= vMin * 0.9 && v <= vMax * 1.1) yTicks.push(v);
+    });
+  }
+
+  const grid = yTicks.map(v => `<line x1="${PAD_L}" x2="${W - PAD_R}" y1="${yScale(v).toFixed(1)}" y2="${yScale(v).toFixed(1)}" stroke="#f1f5f9" stroke-width="1"/>`).join('') +
+               xTicks.map(y => `<line x1="${xScale(y).toFixed(1)}" x2="${xScale(y).toFixed(1)}" y1="${PAD_T}" y2="${PAD_T + plotH}" stroke="#f8fafc" stroke-width="1"/>`).join('');
+
+  const lines = Object.entries(byArtist).map(([name, arr]) => {
+    if (arr.length < 2) return '';
+    const color = colorForArtist(name);
+    const pathD = arr.map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(p.yr).toFixed(1)},${yScale(p.median_ppm).toFixed(1)}`).join(' ');
+    const dots = arr.map(p => `<circle cx="${xScale(p.yr).toFixed(1)}" cy="${yScale(p.median_ppm).toFixed(1)}" r="3" fill="${color}" stroke="#fff" stroke-width="1.5"><title>${esc(name)} — ${p.yr}: $${Math.round(p.median_ppm).toLocaleString()}/m² (n=${p.n})</title></circle>`).join('');
+    return `<path d="${pathD}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.85"/>${dots}`;
+  }).join('');
+
+  const yLabels = yTicks.map(v => `<text x="${PAD_L - 8}" y="${(yScale(v) + 4).toFixed(1)}" text-anchor="end" font-size="10" fill="#94a3b8" font-family="Inter">${fmtCompact(v)}</text>`).join('');
+  const xLabels = xTicks.map(y => `<text x="${xScale(y).toFixed(1)}" y="${H - PAD_B + 16}" text-anchor="middle" font-size="10" fill="#64748b" font-family="Inter">${y}</text>`).join('');
+  const bg = `<rect x="${PAD_L}" y="${PAD_T}" width="${plotW}" height="${plotH}" fill="#fafafa" stroke="#e2e8f0" stroke-width="1"/>`;
+
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="max-width:${W}px;height:auto;background:#fff">
+    ${bg}${grid}${lines}${yLabels}${xLabels}
+  </svg>`;
+}
+
+// Kind pill — flag non-painting lots in sales table so user can spot them at a glance.
+// Painting is the default (no badge → reduces noise).
+const KIND_LABELS = {
+  sculpture: { label: 'Tượng', cls: 'kind-sculpture' },
+  print:     { label: 'Tranh in', cls: 'kind-print' },
+  drawing:   { label: 'Ký họa', cls: 'kind-drawing' },
+  medal:     { label: 'Huy chương', cls: 'kind-medal' },
+};
+function kindBadge(kind){
+  const k = KIND_LABELS[kind];
+  if (!k) return '';
+  return ` <span class="kind-pill ${k.cls}">${k.label}</span>`;
+}
+// Vietnamese label for support_type — used in artist chart filter chips + sales table
+const SUPPORT_LABEL_VN = {
+  canvas: 'Canvas', silk: 'Lụa', paper: 'Giấy',
+  lacquer: 'Sơn mài', panel: 'Panel/board', metal: 'Kim loại',
+};
+
 // Collect yearly price points for an artist (combines auction sales + gallery observations).
 // Each point: { year, price_usd, label, source }. Uses sale_date for auctions, exhibition start_date for gallery.
 function collectYearlyPrices(artist){
@@ -2239,6 +2455,7 @@ function collectYearlyPrices(artist){
     const yr = parseInt((s.sale_date || '').slice(0, 4), 10);
     if (!yr || yr < 1990 || yr > 2030) return;
     pts.push({ year: yr, price_usd: +s.price_usd, source: s.source || 'auction',
+               support: s.support_type || null, kind: s.kind || 'painting',
                label: (s.artwork_title || '') + (s.auction_title ? ' — ' + s.auction_title : '') });
   });
   // Gallery observations use exhibition.start_date for the X-axis
@@ -2274,9 +2491,61 @@ function yearlyAgg(pts){
   }).sort((a,b) => a.year - b.year);
 }
 
+// Re-render artist chart in place with selected support filter.
+function setChartSupport(support){
+  window._chartActiveSupport = support;
+  const a = window._chartArtist;
+  if (!a) return;
+  const newHTML = priceHistoryChart(a);
+  // Find and replace existing chart block (chips + chart-wrap)
+  const heading = [...document.querySelectorAll('h3.section-title')].find(h => h.textContent.includes('Biến động giá'));
+  if (!heading) return;
+  const toRemove = [heading];
+  let n = heading.nextElementSibling;
+  while (n && (n.classList.contains('support-chips') || n.classList.contains('chart-wrap'))) {
+    toRemove.push(n);
+    n = n.nextElementSibling;
+  }
+  const tmp = document.createElement('div');
+  tmp.innerHTML = newHTML;
+  const parent = heading.parentNode;
+  while (tmp.firstChild) parent.insertBefore(tmp.firstChild, heading);
+  toRemove.forEach(el => el.remove());
+}
+
 // Render inline-SVG price-over-time chart. Log-Y scale, scatter dots + median line.
+// Adds a support filter chip row when the artist has work in 2+ supports.
 function priceHistoryChart(artist){
-  const pts = collectYearlyPrices(artist);
+  const allPts = collectYearlyPrices(artist);
+  if (allPts.length < 2) return '';
+  window._chartArtist = artist;
+
+  // Build support filter chips (only if 2+ supports with ≥2 points each)
+  const supportCounts = {};
+  allPts.forEach(p => { const s = p.support || 'unknown'; supportCounts[s] = (supportCounts[s] || 0) + 1; });
+  const supportsAvailable = Object.entries(supportCounts)
+    .filter(([k, v]) => v >= 2 && k !== 'unknown')
+    .sort((a, b) => b[1] - a[1])
+    .map(([k]) => k);
+
+  const active = window._chartActiveSupport || 'all';
+  const pts = active === 'all' ? allPts : allPts.filter(p => p.support === active);
+  if (pts.length < 2) {
+    // Reset and re-render with all
+    window._chartActiveSupport = 'all';
+    return priceHistoryChart(artist);
+  }
+
+  let chips = '';
+  if (supportsAvailable.length >= 2) {
+    const allCls = active === 'all' ? 'active' : '';
+    chips = `<div class="support-chips">
+      <button class="chip ${allCls}" onclick="setChartSupport('all')">Tất cả (${allPts.length})</button>` +
+      supportsAvailable.map(s => {
+        const cls = active === s ? 'active' : '';
+        return `<button class="chip ${cls}" onclick="setChartSupport('${s}')">${SUPPORT_LABEL_VN[s] || s} (${supportCounts[s]})</button>`;
+      }).join('') + `</div>`;
+  }
   if (pts.length < 2) return '';
   const agg = yearlyAgg(pts);
   const years = agg.map(a => a.year);
@@ -2327,6 +2596,7 @@ function priceHistoryChart(artist){
     <text x="8" y="0" font-size="11" fill="#334155">${esc(s)}</text></g>`).join('');
   return `
     <h3 class="section-title">Biến động giá qua các năm <span class="muted" style="font-family:Inter;font-weight:400;font-size:13px">(${pts.length} điểm, ${agg.length} năm, USD — log scale)</span></h3>
+    ${chips}
     <div class="chart-wrap">
       <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" style="max-width:${W}px;height:auto">
         <rect x="${PAD_L}" y="${PAD_T}" width="${plotW}" height="${plotH}" fill="#f8fafc" stroke="#cbd5e1"/>
@@ -2491,8 +2761,8 @@ function renderSales(){
         ${s.lot_number ? `<br><span class="muted">lot ${esc(s.lot_number)}</span>` : ''}
       </td>
       <td>
-        <a href="${esc(s.source_url)}" target="_blank">${esc(s.artwork_title) || '(no title)'}</a>
-        ${s.dimensions ? `<br><span class="muted">${esc(s.dimensions)}${s.area_m2 ? ' · '+s.area_m2+' m²' : ''}</span>` : ''}
+        <a href="${esc(s.source_url)}" target="_blank">${esc(s.artwork_title) || '(no title)'}</a>${kindBadge(s.kind)}
+        ${s.dimensions ? `<br><span class="muted">${esc(s.dimensions)}${s.area_m2 ? ' · '+s.area_m2+' m²' : ''}${s.support_type ? ' · '+esc(SUPPORT_LABEL_VN[s.support_type] || s.support_type) : ''}</span>` : ''}
       </td>
       <td>
         <span class="tag source sm">${esc(s.source)}</span>
@@ -2970,6 +3240,75 @@ function renderReport(){
     })),
     { key: 'premium_lots' });
 
+  // 8h) Suspicious / potentially-forged lots — Indochine masters at <30% median $/m²
+  // OR lots with attribution caveats (attribué/école de/manner of/studio of).
+  const cardSuspicious = reportCard('🚨 Lot nghi vấn — kiểm tra thủ công',
+    '(Tranh giả Đông Dương phổ biến trên thị trường quốc tế. Cờ đỏ: ' +
+    'Indochine masters bán <30% trung vị $/m² của họ THEO ĐÚNG SUPPORT (canvas/lụa/giấy/sơn mài), ' +
+    'hoặc title ghi "attribué/école de/manner of/studio of". Lọc 2018+ để loại sales era cũ. ' +
+    'Đây CHỈ là tín hiệu — cần kiểm chứng provenance/chữ ký/vật liệu trước khi kết luận.)',
+    [{label:'Nghệ sĩ', cls:'sus-col-artist'},
+     {label:'Tác phẩm · Nguồn', cls:'sus-col-title'},
+     {label:'Support', cls:'sus-col-narrow'},
+     {label:'Kích thước', cls:'sus-col-dim'},
+     {label:'Ngày bán', cls:'sus-col-date'},
+     {label:'Estimate', cls:'sus-col-num num'},
+     {label:'Giá USD', cls:'sus-col-num num'},
+     {label:'% median', cls:'sus-col-narrow num'},
+     {label:'Cờ đỏ', cls:'sus-col-flag'}],
+    (r.suspicious_lots || []).map(x => {
+      const flagBadge = x.flag_reason === 'price_anomaly'
+        ? `<span class="pct-cold">≤30%</span>`
+        : `<span style="color:#dc2626;font-weight:600;font-size:11px">${esc(x.flag_reason)}</span>`;
+      const estTxt = (x.estimate_low || x.estimate_high)
+        ? `${money(Math.round(x.estimate_low || 0))}–${money(Math.round(x.estimate_high || 0))}`
+        : '—';
+      const supportLabel = x.support_type ? (SUPPORT_LABEL_VN[x.support_type] || x.support_type) : '—';
+      return {
+        cells: [
+          { html: artistTag(x.artist_id, x.artist_name) },
+          { html: `${esc(x.artwork_title || '—')} <span class="tag source sm" style="margin-left:6px">${esc(x.source)}</span>` },
+          { text: supportLabel },
+          { text: x.dimensions || '—' },
+          { text: x.sale_date || '—' },
+          { text: estTxt },
+          { text: fmtCompact(x.price_usd) },
+          { html: `<span class="pct-cold">${x.pct_of_median}%</span>` },
+          { html: flagBadge },
+        ],
+        action: x.source_url ? { href: x.source_url } : null,
+      };
+    }),
+    { key: 'suspicious_lots', preview: 30 });
+
+  // 8i) Yearly median chart — multi-line, log Y. Shows price progression for top 6 masters.
+  function _yearlyMedianCard(){
+    const dataPts = r.yearly_median_per_artist || [];
+    if (dataPts.length === 0) return '';
+    const byArtist = {};
+    dataPts.forEach(d => {
+      (byArtist[d.artist_name] = byArtist[d.artist_name] || []).push({
+        yr: d.yr, median_ppm: +d.median_ppm, n: d.n
+      });
+    });
+    Object.values(byArtist).forEach(arr => arr.sort((a, b) => a.yr - b.yr));
+    const chart = buildYearlyMedianChart(byArtist, { width: 380, height: 200, isPreview: true });
+    if (!chart) return '';
+    const legend = Object.keys(byArtist).sort().map(name =>
+      `<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;font-size:11px;color:#475569">
+        <span style="display:inline-block;width:10px;height:2px;background:${colorForArtist(name)}"></span>${esc(name)}
+      </span>`
+    ).join('');
+    return `
+      <div class="report-card">
+        <h3 class="report-title">Median $/m² qua các năm — top 6 masters</h3>
+        <div class="report-sub muted">(Lê Phổ 2011 ≠ Lê Phổ 2024. Lọc năm có ≥2 lot painting.)</div>
+        ${chart}
+        <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">${legend}</div>
+      </div>`;
+  }
+  const cardYearlyMedian = _yearlyMedianCard();
+
   // 8e) Per-medium price/m² benchmark — what does sơn mài vs sơn dầu vs lụa cost?
   // Median is the headline number; mean shown alongside for context.
   const cardMediumBenchmark = reportCard('Giá theo chất liệu',
@@ -3080,8 +3419,15 @@ function renderReport(){
       ${cardPremiums}${cardBargains}
       ${card4}${card9}${card5}
       ${card7}${card6}
+      ${cardYearlyMedian}
       ${cardByKind}${cardSculptures}
     </div>
+
+    <h2 class="section-title" style="margin-top:32px">🚨 Lot nghi vấn — kiểm tra thủ công</h2>
+    <div class="report-block-fullwidth">
+      ${cardSuspicious}
+    </div>
+
     <h2 class="section-title" style="margin-top:32px">Dữ liệu chưa đầy đủ</h2>
     <div class="report-grid">
       ${cardMissingDate}${cardMissingDim}${cardEmptyTitles}${cardArtistGaps}
