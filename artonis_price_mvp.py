@@ -389,9 +389,32 @@ def split_artists(value):
     return items
 
 
+_NON_ARTIST_KEYWORDS = (
+    "bao tang", "museum", "studio", "gallery", "galerie", "to chuc",
+    "foundation", "centre", "center", "institut", "institute",
+    "sotheby", "christie", "drouot", "auction house",
+    "truong my thuat", "school of",
+)
+
+
+def looks_like_organizer(name):
+    """True if name is likely an organizer/venue/studio/gallery, not an artist."""
+    norm = normalize_key(name)
+    if any(kw in norm for kw in _NON_ARTIST_KEYWORDS):
+        return True
+    # Heuristic: very long names (>8 words) are likely multi-artist concat that
+    # the splitter failed to break apart — refuse to save as single artist.
+    if len(norm.split()) > 8:
+        return True
+    return False
+
+
 def upsert_artist(conn, name):
     name = clean_text(name)
     if not name:
+        return None
+    if looks_like_organizer(name):
+        print(f"  SKIP non-artist string: {name!r}")
         return None
     normalized = normalize_key(name)
     row = conn.execute("select id from artists where normalized_name = ?", (normalized,)).fetchone()
