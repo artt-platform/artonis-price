@@ -183,6 +183,31 @@ AUCTION_HOUSES = {
         "website": "https://www.phillips.com",
         "kind": "house",
     },
+    "larasati": {
+        "name": "Larasati Auctioneers",
+        "country": "Singapore / Indonesia",
+        "founded": 1991,                       # PT. Balai Lelang Larasati, Jakarta; SG entity One Larasati Arts Pte Ltd
+        "premium_rate_pct": 22.0,              # 22% per recent SG catalogs (was 18% on older sales)
+        "premium_note": "22% buyer's premium on recent Singapore sales (12-18% on older/online sales)",
+        "vat_pct": 0.0,                        # SG GST 9% only for SG buyers; Indonesia PPN 11%
+        "tax_note": "GST 9% for SG buyers; Indonesia PPN 11% for Jakarta sales; international buyers exempt",
+        "vietnamese_art_dept": "Modern and Contemporary Asian Art / Southeast Asian Art (sparse VN content — Lê Phổ, Vũ Cao Đàm, Nguyễn Thanh Bình, Đỗ Quang Em, Đặng Xuân Hoà at London + Singapore sales)",
+        "address": "Singapore: 13 St. Nicholas View, Singapore 567976; Jakarta: Jl. Pasuruan no. 1C, Menteng",
+        "website": "https://www.larasati.com",
+        "kind": "house",
+        "catalog_format_note": "Past catalogs published as PDFs hosted on Google Drive (image+text); per-lot HTML pages NOT available — crawler downloads catalog PDFs and parses lot blocks.",
+    },
+    "artcurial": {
+        "name": "Artcurial",
+        "country": "France",
+        "founded": 2002,
+        "premium_rate_pct": 30.0,
+        "premium_note": "~30% TTC (tax included)",
+        "vat_pct": 20.0,
+        "tax_note": "TVA 20%; droit de suite for artists under 70yrs post-mortem",
+        "vietnamese_art_dept": "Art d'Asie / Indochine",
+        "website": "https://www.artcurial.com",
+    },
     "chons": {
         "name": "Chọn's Auction House",
         "country": "Vietnam (Hà Nội)",

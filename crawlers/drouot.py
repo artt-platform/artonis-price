@@ -1,0 +1,707 @@
+"""Drouot crawler — Paris-based aggregator covering 1000+ regional French auction houses.
+
+Discovery: paginate /en/c/43/asian-art?page=N to enumerate Asian-art sales
+           (cat 43). Each sale URL is /en/v/{saleId}-{slug}.
+Lots:      Sale-detail HTML embeds a SvelteKit data island with `data:{lots:[{…}, …]}`
+           — JS literal (not strict JSON) with unquoted keys and `void 0`. Parsed via
+           targeted regex per field. Each lot's `result` field holds the hammer price
+           (0 if not yet sold / upcoming sale).
+Aggregation: Drouot aggregates many houses (Aguttes, Cornette, Millon, Tessier…).
+           We skip lots whose `auctioneerSlug` matches a house that ships its own
+           dedicated Artonis crawler to avoid duplicate rows.
+Auth:      Cloudscraper handles Cloudflare; no Playwright required.
+"""
+import re
+import sys
+import time
+import json
+import html as _html
+from pathlib import Path
+from datetime import datetime, timezone
+
+import cloudscraper
+
+from crawlers.common import (
+    insert_sale_result, clean_text, clean_artist_name, log_crawl_run,
+)
+
+
+BASE = "https://drouot.com"
+
+# Drouot's Asian Art category id; covers Indochine / Chinese / Japanese / Korean lots.
+ASIAN_ART_CAT = 43
+
+# Auctioneer slugs already covered by their own Artonis crawler. Drouot re-lists
+# their sales (since most member houses also operate independently); skip to avoid
+# inserting the same lot twice via different `source`.
+_SKIP_AUCTIONEERS = {
+    "aguttes",
+    "millon",
+    "cornette-de-saint-cyr",
+    "cornette",
+    "cornettedesaintcyr",
+    "tajan",
+    "gros-and-delettrez",
+    "gros-delettrez",
+    "gros-et-delettrez",
+}
+
+
+def _make_scraper():
+    return cloudscraper.create_scraper(
+        browser={"browser": "firefox", "platform": "darwin", "desktop": True}
+    )
+
+
+# ---- inline SvelteKit JS-literal parsing -----------------------------------
+# Drouot's pages embed app data as a JS object literal (not JSON) — keys are
+# unquoted and `void 0` appears. We extract each lot block via balanced-brace
+# walking from the `lots:[` array, then pull fields with targeted regex.
+
+_LOT_FIELD_PATTERNS = {
+    "id":             re.compile(r"(?<![A-Za-z_])id:\s*(\d+)"),
+    "num":            re.compile(r"(?<![A-Za-z_])num:\s*(\d+)"),
+    "lowEstim":       re.compile(r"(?<![A-Za-z_])lowEstim:\s*([\d.]+)"),
+    "highEstim":      re.compile(r"(?<![A-Za-z_])highEstim:\s*([\d.]+)"),
+    "result":         re.compile(r"(?<![A-Za-z_])result:\s*([\d.]+)"),
+    "currencyId":     re.compile(r'currencyId:\s*"([A-Z]{3})"'),
+    "saleId":         re.compile(r"(?<![A-Za-z_])saleId:\s*(\d+)"),
+    "auctioneerId":   re.compile(r"(?<![A-Za-z_])auctioneerId:\s*(\d+)"),
+    "date":           re.compile(r"(?<![A-Za-z_])date:\s*(\d+)"),
+    "slug":           re.compile(r'(?<![A-Za-z_])slug:\s*"([^"]+)"'),
+    "saleStatus":     re.compile(r'saleStatus:\s*"([A-Z_]+)"'),
+}
+
+
+def _unescape_js_string(s):
+    """Convert a JS double-quoted string body to Python text (handle \\n, \\", \\u escapes)."""
+    return (
+        s.replace("\\n", "\n")
+         .replace('\\"', '"')
+         .replace("\\/", "/")
+         .replace("\\\\", "\\")
+    )
+
+
+def _extract_description(block):
+    """Pull a JS double-quoted description string, handling escapes."""
+    m = re.search(r'description:\s*"((?:[^"\\]|\\.)*)"', block, re.DOTALL)
+    if not m:
+        return ""
+    return _unescape_js_string(m.group(1))
+
+
+def _split_lots(lots_array_text):
+    """Walk a `[{…},{…},…]` JS-literal array and yield each top-level object body
+    (without the enclosing braces). Brace-aware so nested {…} inside lots don't
+    break the split."""
+    s = lots_array_text
+    n = len(s)
+    i = 0
+    # Expect opening '['
+    while i < n and s[i] != "[":
+        i += 1
+    if i >= n:
+        return
+    i += 1  # past [
+    while i < n:
+        # Skip whitespace / commas
+        while i < n and s[i] in " \t\n,":
+            i += 1
+        if i >= n or s[i] == "]":
+            return
+        if s[i] != "{":
+            return
+        # Brace-aware walk, ignoring braces inside double-quoted strings
+        depth = 0
+        start = i
+        in_str = False
+        esc = False
+        while i < n:
+            c = s[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            else:
+                if c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        yield s[start + 1 : i]  # body without outer braces
+                        i += 1
+                        break
+            i += 1
+
+
+def _extract_sale_data_block(html_text):
+    """Find the SvelteKit script tag containing the sale-page data and return it.
+    Drouot puts the dehydrated app state in the script that holds
+    `data:{lots:[…],…}`; the schema.org product script (first <script>) and the
+    Cloudflare challenge stub (last <script>) are skipped automatically."""
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", html_text, re.DOTALL)
+    for s in scripts:
+        if "data:{lots:[" in s and "saleId:" in s:
+            return s
+    return ""
+
+
+def _extract_lots_array(script_text):
+    """Find the `lots:[…]` chunk inside the sale-page script and return its text."""
+    i = script_text.find("data:{lots:[")
+    if i < 0:
+        i = script_text.find("lots:[{")
+        if i < 0:
+            return ""
+    # Move to the [
+    j = script_text.find("[", i)
+    if j < 0:
+        return ""
+    # Brace-walk to closing ]
+    n = len(script_text)
+    k = j + 1
+    depth = 1
+    in_str = False
+    esc = False
+    while k < n and depth > 0:
+        c = script_text[k]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+        k += 1
+    return script_text[j:k]
+
+
+def _extract_sale_info(script_text):
+    """Pull sale-level info (title, city, auctioneerSlug, sale date epoch).
+
+    On a Drouot /v/ page, the sale object is keyed by `saleSlug:` and includes
+    sibling fields title, address{city}, status, auctioneerCard{link{auctioneerSlug,
+    auctioneerName}}, plus a schedules array. We anchor on `saleSlug:` then scan
+    a neighbourhood window for the typed fields (cheaper and more robust than
+    trying to walk to the outermost enclosing brace, since the parent may be
+    layered inside several arrays).
+    """
+    info = {"title": "", "city": "", "auctioneer_slug": "", "auctioneer_name": "", "date": 0}
+    # Anchor on saleSlug:"...". The sale "title:" field appears AFTER saleSlug,
+    # while auctioneerCard appears BEFORE. Search a generous window both sides.
+    m_anchor = re.search(r'saleSlug:"[^"]+"', script_text)
+    if not m_anchor:
+        return info
+    pos = m_anchor.start()
+    win = script_text[max(0, pos - 2500): pos + 2500]
+    # Sale title — the first title:"…" AFTER saleSlug inside the window
+    m_title = re.search(r'saleSlug:"[^"]+"[^"]*?,(?:[^{}\[\]]*?,)*?title:"((?:[^"\\]|\\.)*)"', win)
+    if m_title:
+        info["title"] = _html.unescape(_unescape_js_string(m_title.group(1)))
+    else:
+        # Fallback: look at structuredData -> name:"…" which mirrors the title
+        m_sd = re.search(r'"@type":"Event",name:"((?:[^"\\]|\\.)*)"', win)
+        if m_sd:
+            info["title"] = _html.unescape(_unescape_js_string(m_sd.group(1)))
+    # Auctioneer — read from the structuredData.Organizer block (which lives
+    # next to saleSlug). It has the same name + slug as auctioneerCard.link but
+    # without the multi-kilobyte payload-settings noise in between.
+    m_org = re.search(
+        r'Organizer:\{"@type":"Organization",name:"((?:[^"\\]|\\.)*)",'
+        r'url:"https?://[^"]+/auctioneer/\d+/([a-z0-9\-]+)"',
+        win,
+    )
+    if m_org:
+        info["auctioneer_name"] = _unescape_js_string(m_org.group(1))
+        info["auctioneer_slug"] = m_org.group(2)
+    # City — first address{…city:"…"} in window
+    m_city = re.search(r'address:\{[^}]*?city:"([^"]+)"', win)
+    if m_city:
+        info["city"] = m_city.group(1)
+    # Sale date — Drouot serialises startDate two ways:
+    #  - epoch seconds (integer)        e.g. startDate:1781082000
+    #  - ISO-8601 string (Heritage etc.) e.g. startDate:"2026-06-05T14:50:00.000Z"
+    m_sd = re.search(r'startDate:(?:(\d+)|"([^"]+)")', win)
+    if m_sd:
+        if m_sd.group(1):
+            try:
+                info["date"] = int(m_sd.group(1))
+            except ValueError:
+                pass
+        elif m_sd.group(2):
+            # Store as ISO-8601 string; caller converts to YYYY-MM-DD
+            info["date_iso"] = m_sd.group(2)
+    return info
+
+
+# ---- field parsers ---------------------------------------------------------
+
+# Drouot member-house descriptions wrap the artist heading in several styles:
+#   UPPER CASE:    "ALIX AYMÉ (1894 - 1989)"                    (Cornette / Aguttes)
+#   Title-Case:    "Le Pho (1907-2001)"                         (Millon)
+#   With nat'lty:  "Le Pho (French/Vietnamese, 1907-2001)"      (Heritage Auctions)
+#   Born-only:     "Nguyen Trung (born 1940)"                   (Tessier-Sarrou)
+#   "né en":       "Pham Luc (né en 1943)"                      (French houses)
+# The regex captures the name + birth/death years; intermediate prose like
+# "French/Vietnamese," is allowed inside the parens.
+_ARTIST_HEADER_RE = re.compile(
+    r"^([A-ZÀ-ÿ][A-ZÀ-ÿa-zà-ÿ\-' \.]{2,60})\s*"
+    r"\(\s*(?:[A-Za-zà-ÿ/, \-]*?(?:n[ée]\s+en|born)?\s*)?"
+    r"(\d{4})(?:\s*[-–]\s*(\d{4}))?\s*\)",
+)
+# Title-cased "Le Pho (…1907-2001)" variant — first char is upper, then lower
+_ARTIST_HEADER_TC_RE = re.compile(
+    r"^([A-Z][a-zà-ÿ][A-Za-zà-ÿ\-' \.]{1,60})\s*"
+    r"\(\s*(?:[A-Za-zà-ÿ/, \-]*?(?:n[ée]\s+en|born)?\s*)?"
+    r"(\d{4})(?:\s*[-–]\s*(\d{4}))?\s*\)",
+)
+_DIM_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm", re.IGNORECASE)
+_DIM_IN_RE = re.compile(r"(\d+(?:[ /]?\d+/\d+)?)\s*[\"”]\s*[x×]\s*(\d+(?:[ /]?\d+/\d+)?)\s*[\"”]")
+
+_MEDIUM_HINTS = (
+    "huile", "aquarelle", "encre", "laque", "gouache", "pastel", "fusain",
+    "sanguine", "crayon", "soie", "acrylique", "lithographie", "estampe",
+    "oil", "watercolour", "watercolor", "ink", "lacquer", "pencil", "silk",
+    "tempera", "technique mixte", "mixed media", "ink wash",
+)
+
+
+def _parse_artist_and_title(description):
+    """Parse the artist header + artwork title from a Drouot lot description.
+
+    Drouot lots come from many member houses, so we see two main shapes:
+      Multi-line:  'ARTIST (1907-2001)\\nTitle\\nMedium\\nDimensions'
+      Single-line: 'Le Pho (French/Vietnamese, 1907-2001) Title Title Oil on board 18 x 13"…'
+
+    Returns (artist_raw, artwork_title, birth_year, death_year).
+    """
+    if not description:
+        return "", "", None, None
+    lines = [ln.strip() for ln in description.split("\n") if ln.strip()]
+    if not lines:
+        return "", "", None, None
+    head = lines[0]
+    m = _ARTIST_HEADER_RE.match(head) or _ARTIST_HEADER_TC_RE.match(head)
+    if not m:
+        return "", "", None, None
+    artist = clean_text(m.group(1))
+    b_yr = int(m.group(2)) if m.group(2) else None
+    d_yr = int(m.group(3)) if m.group(3) else None
+
+    # Look for the title in lines AFTER the header (multi-line case) or after the
+    # ")" on the SAME line (single-line / Heritage-style case).
+    title = ""
+
+    # Single-line case — head has more text after the closing ")"
+    after_close = head[m.end():].strip()
+    if after_close:
+        # Title is everything up to a medium keyword or a dimension token
+        cand = after_close
+        # Trim at first medium keyword (case-insensitive)
+        low = cand.lower()
+        cut_at = len(cand)
+        for kw in _MEDIUM_HINTS:
+            idx = low.find(kw)
+            if 4 < idx < cut_at:
+                cut_at = idx
+        # Also stop at dimension hint
+        m_dim = _DIM_RE.search(cand) or _DIM_IN_RE.search(cand)
+        if m_dim and m_dim.start() > 4:
+            cut_at = min(cut_at, m_dim.start())
+        cand = cand[:cut_at].strip(" .,;:-")
+        if 2 < len(cand) < 200:
+            title = cand
+
+    if not title:
+        for ln in lines[1:5]:
+            low = ln.lower()
+            if any(kw in low for kw in _MEDIUM_HINTS):
+                continue
+            if _DIM_RE.search(ln) or _DIM_IN_RE.search(ln):
+                continue
+            if re.match(r"^(sign|certificat|provenance|exposition|bibliograph|\d+\s*(cm|x))",
+                        ln, re.IGNORECASE):
+                continue
+            if len(ln) < 2 or len(ln) > 200:
+                continue
+            title = ln
+            break
+    return artist, title[:200], b_yr, d_yr
+
+
+def _parse_medium(description):
+    """Pick out the medium phrase. We always snip from the FIRST medium keyword
+    forward (rather than returning whole lines) so single-line descriptions from
+    Heritage/Drouot don't include the title, dimensions, or signature note."""
+    low = description.lower()
+    for kw in _MEDIUM_HINTS:
+        idx = low.find(kw)
+        if idx < 0:
+            continue
+        # Walk forward up to ~80 chars or until a hard stop (period, newline,
+        # next dimension token, or "Signed").
+        end = idx + len(kw)
+        tail = description[end : end + 80]
+        m_stop = re.search(r"[.\n]|\d+(?:[.,]\d+)?\s*[x×]|Signed|\(", tail)
+        if m_stop:
+            end += m_stop.start()
+        else:
+            end += len(tail)
+        return clean_text(description[idx:end])[:120]
+    return ""
+
+
+def _parse_dimensions(description):
+    """Prefer cm dimensions. If only inch dims are present (e.g. 18 x 13 inches),
+    convert to cm so downstream price/m² is consistent across houses."""
+    m = _DIM_RE.search(description)
+    if m:
+        return f"{m.group(1).replace(',', '.')} x {m.group(2).replace(',', '.')} cm"
+    # Heritage often writes "18 x 13 inches (45.7 x 33.0 cm)" — the cm form
+    # is normally captured above. Last resort: parse plain "18 x 13 inches".
+    m_in = re.search(r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*inches?", description, re.IGNORECASE)
+    if m_in:
+        try:
+            w = float(m_in.group(1)) * 2.54
+            h = float(m_in.group(2)) * 2.54
+            return f"{w:.1f} x {h:.1f} cm"
+        except ValueError:
+            pass
+    return ""
+
+
+def _parse_year(title, description):
+    blob = (title or "") + " " + (description or "")
+    m = re.search(r"(?:circa|vers|c\.)\s*(\d{4})", blob, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b(1[89]\d{2}|20[0-2]\d)\b", title or "")
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _load_vn():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
+    for m in list(sys.modules.keys()):
+        if "vn_artist_catalog" in m:
+            del sys.modules[m]
+    from vn_artist_catalog import VN_ARTIST_CATALOG, NON_VN_EXCLUSIONS
+    return VN_ARTIST_CATALOG, NON_VN_EXCLUSIONS
+
+
+def _is_vietnamese(artist_raw, vn_catalog, exclusions):
+    from artonis_price_mvp import normalize_key
+    norm = normalize_key(artist_raw)
+    if not norm or norm in exclusions:
+        return False
+    if norm in vn_catalog:
+        return True
+    for k in vn_catalog:
+        if norm == k or norm.startswith(k + " ") or k.startswith(norm + " "):
+            return True
+    return False
+
+
+# ---- discovery -------------------------------------------------------------
+
+_SALE_URL_RE = re.compile(r'/[a-z]{2}/v/(\d+)-([a-z0-9\-]+?)(?=[?"])')
+
+
+def discover_asian_sales(scraper, max_pages=20, verbose=False):
+    """Discover Drouot Asian-art sale URLs.
+
+    Drouot exposes two sale lists:
+      • /en/auctions/future?categs=43 — upcoming sales, paginated.
+      • /en/auctions/hotel?categs=43  — sales currently at Hôtel Drouot.
+    Both feed into the same sale-id space; we union them. `max_pages` is the
+    TOTAL request budget shared across both lists (cheaper for callers who
+    want a small smoke test).
+    """
+    seen = {}  # saleId -> url
+    base_paths = [
+        f"/en/auctions/future?categs={ASIAN_ART_CAT}",
+        f"/en/auctions/hotel?categs={ASIAN_ART_CAT}",
+    ]
+    budget = max(1, int(max_pages))
+    for base_path in base_paths:
+        if budget <= 0:
+            break
+        for page in range(1, budget + 1):
+            sep = "&" if "?" in base_path else "?"
+            url = f"{BASE}{base_path}{sep}page={page}" if page > 1 else f"{BASE}{base_path}"
+            try:
+                r = scraper.get(url, timeout=30)
+            except Exception as e:
+                if verbose:
+                    print(f"  [drouot] {base_path} p{page} request error: {e}",
+                          flush=True)
+                break
+            budget -= 1
+            if r.status_code != 200:
+                if verbose:
+                    print(f"  [drouot] {base_path} p{page} HTTP {r.status_code}",
+                          flush=True)
+                break
+            r.encoding = "utf-8"
+            new = 0
+            for m in _SALE_URL_RE.finditer(r.text):
+                sid, slug = m.group(1), m.group(2)
+                if sid in seen:
+                    continue
+                seen[sid] = f"{BASE}/en/v/{sid}-{slug}"
+                new += 1
+            if verbose:
+                print(f"  [drouot] {base_path} p{page}: +{new} sales "
+                      f"(total {len(seen)})", flush=True)
+            if new == 0 or budget <= 0:
+                break
+            time.sleep(0.4)
+    return list(seen.values())
+
+
+# ---- sale-page lot extraction ---------------------------------------------
+
+def parse_sale_page(html_text, sale_url):
+    """Parse a Drouot sale-detail HTML and return (sale_info, lots_list).
+    `lots_list` is a list of dicts with raw lot fields.
+    """
+    script_text = _extract_sale_data_block(html_text)
+    if not script_text:
+        return {}, []
+    sale_info = _extract_sale_info(script_text)
+    lots_array_text = _extract_lots_array(script_text)
+    if not lots_array_text:
+        return sale_info, []
+    lots = []
+    for body in _split_lots(lots_array_text):
+        rec = {}
+        for fld, pat in _LOT_FIELD_PATTERNS.items():
+            m = pat.search(body)
+            if m:
+                rec[fld] = m.group(1)
+        desc = _extract_description(body)
+        rec["description"] = desc
+        # Original (French) description preferred when the English one is empty
+        m_orig = re.search(r'originalDescription:\s*"((?:[^"\\]|\\.)*)"', body, re.DOTALL)
+        if m_orig:
+            rec["originalDescription"] = _unescape_js_string(m_orig.group(1))
+        lots.append(rec)
+    return sale_info, lots
+
+
+# ---- main entry ------------------------------------------------------------
+
+def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pages=200):
+    """Crawl Drouot Asian-art sales. Returns (inserted, scanned).
+
+    Args:
+      sale_urls:  explicit list of sale URLs to crawl; if None, discovers from
+                  /en/c/43/asian-art pagination.
+      delay:      seconds to sleep between sale fetches.
+      filter_vn:  when True (default), only insert lots whose artist matches the
+                  VN catalog (mirrors aguttes/millon behaviour).
+      max_pages:  cap on discovery pages (each ~30 sales).
+    """
+    scraper = _make_scraper()
+    vn_catalog, exclusions = _load_vn() if filter_vn else ({}, set())
+
+    if sale_urls is None:
+        if verbose:
+            print("  [drouot] discovering Asian-art sales…", flush=True)
+        sale_urls = discover_asian_sales(scraper, max_pages=max_pages, verbose=verbose)
+        if verbose:
+            print(f"  [drouot] found {len(sale_urls)} sale URLs", flush=True)
+
+    total_inserted = 0
+    total_scanned = 0
+
+    for i, sale_url in enumerate(sale_urls, 1):
+        run_started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            r = scraper.get(sale_url, timeout=30)
+        except Exception as e:
+            if verbose:
+                print(f"  [{i}/{len(sale_urls)}] {sale_url[-60:]}: ERR {e}", flush=True)
+            log_crawl_run(conn, "drouot", target_slug=sale_url[-80:],
+                          started_at=run_started, status="error", note=str(e)[:200])
+            continue
+        if r.status_code != 200:
+            if verbose:
+                print(f"  [{i}/{len(sale_urls)}] HTTP {r.status_code}", flush=True)
+            log_crawl_run(conn, "drouot", target_slug=sale_url[-80:],
+                          started_at=run_started, status="error",
+                          note=f"HTTP {r.status_code}")
+            time.sleep(delay)
+            continue
+        # Drouot serves UTF-8 but omits the charset header; cloudscraper falls back
+        # to ISO-8859-1 which mangles French/Vietnamese diacritics.
+        r.encoding = "utf-8"
+
+        sale_info, lots = parse_sale_page(r.text, sale_url)
+        total_scanned += len(lots)
+
+        # Skip whole sale if auctioneer is one of our dedicated-crawler houses —
+        # avoids duplicate rows for the same lot under different `source`.
+        auct_slug = (sale_info.get("auctioneer_slug") or "").lower()
+        if auct_slug in _SKIP_AUCTIONEERS:
+            if verbose:
+                print(f"  [{i}/{len(sale_urls)}] skip {auct_slug} sale "
+                      f"({len(lots)} lots)", flush=True)
+            log_crawl_run(conn, "drouot", target_slug=sale_url[-80:],
+                          started_at=run_started, lots_scanned=len(lots),
+                          lots_inserted=0, status="skip",
+                          note=f"auctioneer={auct_slug}")
+            time.sleep(delay)
+            continue
+
+        sale_date = ""
+        if sale_info.get("date"):
+            try:
+                sale_date = datetime.fromtimestamp(int(sale_info["date"]), tz=timezone.utc) \
+                                    .strftime("%Y-%m-%d")
+            except (ValueError, OSError):
+                sale_date = ""
+        if not sale_date and sale_info.get("date_iso"):
+            # ISO-8601 string "2026-06-05T14:50:00.000Z"
+            sale_date = sale_info["date_iso"][:10]
+        sale_city = sale_info.get("city") or "Paris"
+        sale_title_full = sale_info.get("title", "").strip() or "Drouot Asian Art Sale"
+        # Normalise &amp; HTML entities in sale title
+        sale_title_full = _html.unescape(sale_title_full)
+        auctioneer_name = sale_info.get("auctioneer_name") or ""
+        auction_title = f"Drouot — {sale_title_full}"
+        if auctioneer_name:
+            auction_title += f" ({auctioneer_name})"
+
+        inserted_this = 0
+        sale_date_min = sale_date_max = None
+        for lot in lots:
+            # Drouot lots embed source-URL slug + numeric id
+            lot_id = lot.get("id")
+            lot_slug = lot.get("slug")
+            if not lot_id or not lot_slug:
+                continue
+            lot_url = f"{BASE}/en/l/{lot_id}-{lot_slug}"
+
+            desc = lot.get("description") or lot.get("originalDescription") or ""
+            artist_raw, artwork_title, b_yr, d_yr = _parse_artist_and_title(desc)
+            if not artist_raw:
+                continue
+            artist_raw, _alt_birth = clean_artist_name(artist_raw)
+            if not artist_raw:
+                continue
+
+            if filter_vn and not _is_vietnamese(artist_raw, vn_catalog, exclusions):
+                continue
+
+            # Determine status / hammer price
+            try:
+                result = float(lot.get("result", 0) or 0)
+            except ValueError:
+                result = 0.0
+            try:
+                low_est = float(lot.get("lowEstim", 0) or 0) or None
+            except ValueError:
+                low_est = None
+            try:
+                high_est = float(lot.get("highEstim", 0) or 0) or None
+            except ValueError:
+                high_est = None
+
+            currency = lot.get("currencyId", "EUR") or "EUR"
+
+            if result > 0:
+                status = "sold"
+                hammer = result
+            else:
+                # Upcoming / unsold — use estimate midpoint as proxy (matches
+                # Invaluable's policy for non-realised lots) and tag distinctly.
+                if low_est and high_est:
+                    hammer = (low_est + high_est) / 2.0
+                elif low_est:
+                    hammer = low_est
+                elif high_est:
+                    hammer = high_est
+                else:
+                    continue  # nothing usable
+                status = "estimate_only"
+
+            medium = _parse_medium(desc)
+            dimensions = _parse_dimensions(desc)
+            year_str = _parse_year(artwork_title, desc)
+
+            rec = {
+                "source": "drouot",
+                "source_url": lot_url,
+                "sale_page_url": sale_url,
+                "lot_number": str(lot.get("num") or ""),
+                "auction_title": auction_title[:300],
+                "sale_date": sale_date,
+                "sale_location": sale_city,
+                "artist_name_raw": artist_raw,
+                "artwork_title": artwork_title,
+                "medium": medium,
+                "dimensions": dimensions,
+                "year": year_str,
+                "estimate_low": low_est,
+                "estimate_high": high_est,
+                "hammer_price": hammer,
+                "currency": currency,
+                "status": status,
+                "raw_snapshot": json.dumps({
+                    "organizer_house": auctioneer_name,
+                    "auctioneer_slug": auct_slug,
+                    "sale_id": lot.get("saleId"),
+                    "desc_excerpt": desc[:400],
+                }, ensure_ascii=False)[:1500],
+            }
+            try:
+                insert_sale_result(conn, rec)
+                inserted_this += 1
+                if sale_date:
+                    if sale_date_min is None or sale_date < sale_date_min:
+                        sale_date_min = sale_date
+                    if sale_date_max is None or sale_date > sale_date_max:
+                        sale_date_max = sale_date
+            except Exception as e:
+                if verbose:
+                    print(f"    insert err {lot_id}: {e}", flush=True)
+
+        conn.commit()
+        log_crawl_run(
+            conn, "drouot",
+            target_slug=sale_url[-80:],
+            started_at=run_started,
+            lots_scanned=len(lots),
+            lots_inserted=inserted_this,
+            sale_date_min=sale_date_min,
+            sale_date_max=sale_date_max,
+            status="ok",
+            note=(sale_title_full + (f" / {auctioneer_name}" if auctioneer_name else ""))[:120],
+        )
+        total_inserted += inserted_this
+        if verbose:
+            print(
+                f"  [{i}/{len(sale_urls)}] {sale_date or '----------'} "
+                f"{(auctioneer_name or auct_slug or '?')[:24]:24s} "
+                f"{sale_title_full[:40]:40s} "
+                f"{len(lots)} lots / {inserted_this} VN inserted",
+                flush=True,
+            )
+        time.sleep(delay)
+
+    return total_inserted, total_scanned

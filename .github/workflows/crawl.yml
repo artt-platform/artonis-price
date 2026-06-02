@@ -77,7 +77,7 @@ jobs:
             MAX_PAGES="${{ github.event.inputs.max_pages }}"
           elif [ "${{ github.event.schedule }}" = "0 2 * * *" ]; then
             # Daily: fast sources only (no Playwright)
-            CRAWLERS_LIST="christies,sothebys,phillips,bonhams,millon,millon_vn,tajan,gros_delettrez"
+            CRAWLERS_LIST="christies,sothebys,phillips,bonhams,millon,millon_vn,tajan,artcurial,larasati,gros_delettrez"
             MAX_PAGES="50"
           else
             # Weekly: all
