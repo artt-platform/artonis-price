@@ -1,0 +1,109 @@
+name: Crawl auctions
+
+# Triggers:
+#   - Daily 02:00 UTC (= 09:00 ICT): fast sources only (no Playwright)
+#   - Weekly Sunday 19:00 UTC (= 02:00 Mon ICT): full crawl + refresh stats
+#   - Manual: pick sources via dropdown
+on:
+  schedule:
+    - cron: '0 2 * * *'    # daily 09:00 ICT
+    - cron: '0 19 * * 0'   # Sunday 02:00 Mon ICT
+  workflow_dispatch:
+    inputs:
+      crawlers:
+        description: 'Comma-separated crawler keys (empty = all)'
+        required: false
+        default: ''
+      max_pages:
+        description: 'Max pages per crawler'
+        required: false
+        default: '100'
+      refresh_stats:
+        description: 'Refresh artist stats after crawl'
+        type: boolean
+        default: true
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python deps
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: |
+          # Only install browser for weekly runs (includes invaluable/aguttes/global_auction)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${{ github.event.schedule }}" = "0 19 * * 0" ]; then
+            playwright install --with-deps chromium
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            playwright install --with-deps chromium
+          fi
+
+      - name: Configure env
+        run: |
+          # Sentinel env file for crawl_and_sync.py to read
+          cat > .env.local <<EOF
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+          EOF
+
+      - name: Init empty SQLite
+        run: |
+          # Create empty data/ with fresh DB — crawler will populate
+          mkdir -p data
+          /usr/bin/python3 -c "
+          import sys; sys.path.insert(0, '.')
+          from artonis_price_mvp import init_db
+          init_db()
+          "
+
+      - name: Pick crawlers list
+        id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual: use user input, all if empty
+            CRAWLERS_LIST="${{ github.event.inputs.crawlers }}"
+            MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          elif [ "${{ github.event.schedule }}" = "0 2 * * *" ]; then
+            # Daily: fast sources only (no Playwright)
+            CRAWLERS_LIST="christies,sothebys,bonhams,millon,millon_vn,gros_delettrez"
+            MAX_PAGES="50"
+          else
+            # Weekly: all
+            CRAWLERS_LIST=""
+            MAX_PAGES="100"
+          fi
+          echo "crawlers=$CRAWLERS_LIST" >> $GITHUB_OUTPUT
+          echo "max_pages=$MAX_PAGES" >> $GITHUB_OUTPUT
+          echo "Crawlers: '$CRAWLERS_LIST', max_pages: $MAX_PAGES"
+
+      - name: Run crawl + sync
+        env:
+          CRAWLERS: ${{ steps.pick.outputs.crawlers }}
+          MAX_PAGES: ${{ steps.pick.outputs.max_pages }}
+        run: |
+          python3 crawl_and_sync.py
+
+      - name: Refresh artist stats
+        if: github.event_name == 'schedule' && github.event.schedule == '0 19 * * 0' || github.event.inputs.refresh_stats == 'true'
+        run: |
+          python3 supabase/refresh_artist_stats.py
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Crawl finished" >> $GITHUB_STEP_SUMMARY
+          echo "- Trigger: ${{ github.event_name }} ${{ github.event.schedule }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Crawlers: ${{ steps.pick.outputs.crawlers || 'all' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Max pages: ${{ steps.pick.outputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
