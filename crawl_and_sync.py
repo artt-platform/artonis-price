@@ -50,13 +50,17 @@ H = {
 ALL_CRAWLERS = [
     ('christies',      'crawlers.christies',      'christies',      'crawl'),
     ('sothebys',       'crawlers.sothebys',       'sothebys',       'crawl'),
+    ('phillips',       'crawlers.phillips',       'phillips',       'crawl'),
     ('bonhams',        'crawlers.bonhams',        'bonhams',        'crawl_all'),
     ('aguttes',        'crawlers.aguttes',        'aguttes',        'crawl'),
+    ('tajan',          'crawlers.tajan',          'tajan',          'crawl'),
     ('millon',         'crawlers.millon',         'millon',         'crawl_all'),
     ('millon_vn',      'crawlers.millon_vn',      'millon',         'crawl'),
     ('gros_delettrez', 'crawlers.gros_delettrez', 'gros-delettrez', 'crawl'),
     ('invaluable',     'crawlers.invaluable',     'invaluable',     'crawl_all'),
     ('global_auction', 'crawlers.global_auction', 'global-auction', 'crawl'),
+    # Chọn — site offline since 2021, manual via Wayback only (excluded from automated runs):
+    # ('chons',          'crawlers.chons',          'chons',          'crawl'),
 ]
 
 WHICH = os.environ.get('CRAWLERS', '').strip()

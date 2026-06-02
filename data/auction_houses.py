@@ -183,6 +183,21 @@ AUCTION_HOUSES = {
         "website": "https://www.phillips.com",
         "kind": "house",
     },
+    "chons": {
+        "name": "Chọn's Auction House",
+        "country": "Vietnam (Hà Nội)",
+        "founded": 2016,
+        "premium_rate_pct": 12.0,
+        "premium_note": "~12-15% buyer's premium (typical VN house)",
+        "vat_pct": 10.0,
+        "tax_note": "10% VAT on premium for VN buyers",
+        "vietnamese_art_dept": "Vietnamese modern & contemporary art",
+        "address": "63 Hàm Long, P. Hàng Bài, Q. Hoàn Kiếm, Hà Nội (historical: 17 Trần Quốc Toản)",
+        "website": "https://chondaugia.vn",  # historical — site offline since 2021;
+                                              # recovered via Wayback Machine
+        "kind": "house",
+        "status_note": "House inactive since ~2021; historical lots recovered via Internet Archive",
+    },
 }
 
 
