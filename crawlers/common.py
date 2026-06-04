@@ -137,6 +137,7 @@ FX_TO_USD = {
     "SGD": 0.75,
     "CHF": 1.10,
     "AUD": 0.65,
+    "TWD": 0.0314,   # ≈ NT$31.85 per USD (2026)
     "VND": 1.0 / VND_TO_USD_RATE,
 }
 

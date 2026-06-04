@@ -57,6 +57,9 @@ ALL_CRAWLERS = [
     ('artcurial',      'crawlers.artcurial',      'artcurial',      'crawl'),
     ('drouot',         'crawlers.drouot',         'drouot',         'crawl'),
     ('larasati',       'crawlers.larasati',       'larasati',       'crawl'),
+    ('ravenel',        'crawlers.ravenel',        'ravenel',        'crawl'),
+    # Heritage Auctions — DataDome anti-bot blocked, requires manual cookies (excluded):
+    # ('heritage',       'crawlers.heritage',       'heritage',       'crawl'),
     ('millon',         'crawlers.millon',         'millon',         'crawl_all'),
     ('millon_vn',      'crawlers.millon_vn',      'millon',         'crawl'),
     ('gros_delettrez', 'crawlers.gros_delettrez', 'gros-delettrez', 'crawl'),

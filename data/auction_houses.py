@@ -197,6 +197,20 @@ AUCTION_HOUSES = {
         "kind": "house",
         "catalog_format_note": "Past catalogs published as PDFs hosted on Google Drive (image+text); per-lot HTML pages NOT available — crawler downloads catalog PDFs and parses lot blocks.",
     },
+    "ravenel": {
+        "name": "Ravenel Art Group",
+        "country": "Taiwan / Hong Kong",
+        "founded": 1999,
+        "premium_rate_pct": 20.0,             # 20% on Taipei sales (typical Ravenel buyer's premium)
+        "premium_note": "~20% buyer's premium",
+        "vat_pct": 5.0,                       # Taiwan business tax (5%) — only Taiwan-resident buyers
+        "tax_note": "Business tax 5% for TW buyers; HK sales no VAT; international buyers handle their own import duties",
+        "vietnamese_art_dept": "Modern & Contemporary Asian Art / Select: Modern & Contemporary Art (sparse VN content — Lê Phổ once HK 2014, Bùi Xuân Phái 2023 Select; main VN names: TRAN Luu Hau, Trung Nguyen, DAO Hai Phong, Boi Tran, Thanh Binh Nguyen — chiefly via Taipei Select sales 2018-2020)",
+        "address": "12F, No. 18 Sec. 1, Chang-An East Rd, Taipei 104, Taiwan",
+        "website": "https://www.ravenel.com",
+        "kind": "house",
+        "catalog_format_note": "Past sales via /en/auCal/lots/{auctionUid} with lots returned from JSON API /rest/auc/lots/{auctionUid}?orderBy=lotSn&language=en — TWD primary, USD/HKD aside. Sale dates derived from auctionName (Spring → June, Autumn → December).",
+    },
     "artcurial": {
         "name": "Artcurial",
         "country": "France",
@@ -207,6 +221,20 @@ AUCTION_HOUSES = {
         "tax_note": "TVA 20%; droit de suite for artists under 70yrs post-mortem",
         "vietnamese_art_dept": "Art d'Asie / Indochine",
         "website": "https://www.artcurial.com",
+    },
+    "heritage": {
+        "name": "Heritage Auctions",
+        "country": "US (Dallas, TX)",
+        "founded": 1976,
+        "premium_rate_pct": 25.0,
+        "premium_note": "25% up to $300k, 20% $300k–$3M, 12.5% above (Fine Art schedule)",
+        "vat_pct": 0.0,
+        "tax_note": "US sales tax varies by state (TX, NY, CA most common)",
+        "vietnamese_art_dept": "Asian Modern & Contemporary Art — Fine & Decorative Asian Art (occasional Lê Phổ / Mai Trung Thứ / Vũ Cao Đàm / Lebadang)",
+        "address": "3500 Maple Ave, Dallas, TX 75219",
+        "website": "https://www.ha.com",
+        "kind": "house",
+        "fetch_note": "Site is fully protected by DataDome (geo.captcha-delivery.com). Plain `requests`, cloudscraper, curl_cffi, AND headless Playwright with playwright-stealth (real Chrome channel) all return HTTP 403 with a JS captcha interstitial. Live extraction requires a residential proxy + DataDome solver or manual session cookies — see crawlers/heritage.py docstring.",
     },
     "chons": {
         "name": "Chọn's Auction House",
