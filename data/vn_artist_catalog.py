@@ -32,6 +32,7 @@ VN_ARTIST_CATALOG = {
     "nguyen gia tri":          ("Nguyễn Gia Trí",            1908, 1993),
     "tran van can":            ("Trần Văn Cẩn",              1910, 1994),
     "le thi luu":              ("Lê Thị Lựu",                1911, 1988),
+    "le thy":                  ("Lê Thy",                    1919, 1961),
     "nguyen khang":            ("Nguyễn Khang",              1912, 1989),
     "hoang tich chu":          ("Hoàng Tích Chù",            1912, 2003),
     "nguyen do cung":          ("Nguyễn Đỗ Cung",            1912, 1977),
