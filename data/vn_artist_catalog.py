@@ -75,6 +75,7 @@ VN_ARTIST_CATALOG = {
 
     # ===== POST-WAR / KHÁNG CHIẾN (1930s-1940s) =====
     "nguyen trung":            ("Nguyễn Trung",              1940, None),
+    "trung nguyen":            ("Nguyễn Trung",              1940, None),  # Western-order alias (Ravenel etc.)
     "ho huu thu":              ("Hồ Hữu Thủ",                1940, 2024),
     "nguyen thi hiep":         ("Nguyễn Thị Hiệp",           1935, None),
     "do xuan doan":            ("Đỗ Xuân Doãn",              1937, 2015),

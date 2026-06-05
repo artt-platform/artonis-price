@@ -244,10 +244,14 @@ def lot_to_record(lot, sale_meta):
         dims = ""
     year = (lot.get("year") or "").strip()
 
-    artwork_uid = lot.get("uidStr") or lot.get("uid") or ""
+    # NOTE: Ravenel /en/cata/lots/{UUID} per-lot pages return 404 — the site
+    # only keeps the parent sale catalog (/en/auCal/lots/{auctionUid}) live.
+    # Point source_url at the sale page (with #lot=NN fragment so we can scroll
+    # to the relevant lot when their catalog UI supports it).
+    sale_url = sale_meta.get("sale_url", "")
+    lot_sn = str(lot.get("sn", "") or "")
     source_url = (
-        f"https://www.ravenel.com/en/cata/lots/{artwork_uid}" if artwork_uid
-        else sale_meta.get("sale_url", "")
+        f"{sale_url}#lot-{lot_sn}" if sale_url and lot_sn else sale_url
     )
 
     status = "sold" if hammer is not None else "passed"
