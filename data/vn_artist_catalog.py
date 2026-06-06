@@ -109,7 +109,10 @@ VN_ARTIST_CATALOG = {
     "nguyen quan huy":         ("Nguyễn Quân Huy",           1954, None),
     "nguyen thanh binh":       ("Nguyễn Thanh Bình",         1954, None),
     "thanh binh nguyen":       ("Nguyễn Thanh Bình",         1954, None),  # Western-order alias (Ravenel)
-    "boi tran":                ("Bội Trân",                  None, None),  # contemporary, Huế painter
+    "boi tran":                ("Bội Trân",                  1957, None),  # Huế painter
+    "le chanh":                ("Lê Chánh",                  1940, None),  # TP.HCM
+    "luong khanh toan":        ("Lương Khánh Toàn",          1955, None),  # Ninh Bình
+    "nguyen dieu thuy":        ("Nguyễn Diệu Thủy",          1962, None),  # TP.HCM
     "pham luan":               ("Phạm Luận",                 1954, None),
     "bui huu hung":            ("Bùi Hữu Hùng",              1957, None),
     "tran luong":              ("Trần Lương",                1960, None),
@@ -181,7 +184,7 @@ VN_ARTIST_CATALOG = {
     "nguyen thi thu ha":       ("Nguyễn Thị Thu Hà",         1979, None),
     "tran minh kim thoai":     ("Trần Minh Kim Thoại",       None, None),
     "dao minh tuan":           ("Đào Minh Tuấn",             2003, None),
-    "dao minh tu":             ("Đào Minh Tú",               None, None),
+    "dao minh tu":             ("Đào Minh Tú",               2003, None),  # silk specialist
     "vu tuan viet":            ("Vũ Tuấn Việt",              1992, None),
     "duong thuy duong":        ("Dương Thuỳ Dương",          1979, None),
     "duong thuy duong 1":      ("Dương Thuỳ Dương",          1979, None),
