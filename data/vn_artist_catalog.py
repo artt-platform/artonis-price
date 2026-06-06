@@ -108,6 +108,8 @@ VN_ARTIST_CATALOG = {
     "nguyen thi tam":          ("Nguyễn Thị Tâm",            1955, None),
     "nguyen quan huy":         ("Nguyễn Quân Huy",           1954, None),
     "nguyen thanh binh":       ("Nguyễn Thanh Bình",         1954, None),
+    "thanh binh nguyen":       ("Nguyễn Thanh Bình",         1954, None),  # Western-order alias (Ravenel)
+    "boi tran":                ("Bội Trân",                  None, None),  # contemporary, Huế painter
     "pham luan":               ("Phạm Luận",                 1954, None),
     "bui huu hung":            ("Bùi Hữu Hùng",              1957, None),
     "tran luong":              ("Trần Lương",                1960, None),
