@@ -59,13 +59,25 @@ def to_nfc(s): return unicodedata.normalize('NFC', s)
 
 
 def rclone_download(drive_relative_path, dest):
-    """Download from gdrive_artonis: using NFD form."""
-    src = f"gdrive_artonis:{to_nfd(drive_relative_path)}"
-    result = subprocess.run(
-        ['rclone', 'copyto', src, str(dest)],
-        capture_output=True, text=True, timeout=120,
-    )
-    return result.returncode == 0, result.stderr
+    """Download from gdrive_artonis: using NFD form.
+    Retries with a 6-digit date format (`- YYMMDD -`) if the original
+    8-digit form (`- 20YYMMDD -`) doesn't resolve — Drive folders/files
+    use the short form while the DB sometimes stores the long form."""
+    candidates = [drive_relative_path]
+    short_dates = re.sub(r" - 20(\d{2})(\d{2})(\d{2}) ", r" - \1\2\3 ", drive_relative_path)
+    if short_dates != drive_relative_path:
+        candidates.append(short_dates)
+    last_err = ""
+    for cand in candidates:
+        src = f"gdrive_artonis:{to_nfd(cand)}"
+        result = subprocess.run(
+            ['rclone', 'copyto', src, str(dest)],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0:
+            return True, ""
+        last_err = result.stderr
+    return False, last_err
 
 
 def find_artist_id(name):
