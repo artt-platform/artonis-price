@@ -75,6 +75,12 @@ VN_ARTIST_CATALOG = {
     "tran van tho":            ("Trần Văn Thọ",              1917, 2004),
     "dinh minh":               ("Đinh Minh",                 1917, None),
     "dinh xuan minh":          ("Đinh Minh",                 1917, None),  # full-name alias
+    "tran dong luong":         ("Trần Đông Lương",           1925, 1993),
+    "nguyen tuong lan":        ("Nguyễn Tường Lân",          1906, 1946),
+    "trinh huu ngoc":          ("Trịnh Hữu Ngọc",            1912, 1997),
+    "nguyen phuoc":            ("Nguyễn Phước",              1943, None),
+    "nguyen khai":             ("Nguyên Khai",               1940, None),
+    "ton that dao":            ("Tôn Thất Đào",              1910, 1979),
     "le thiet cuong":          ("Lê Thiết Cương",            1962, None),
     "pham kim binh":           ("Phạm Kim Bình",             1930, 2014),
 
