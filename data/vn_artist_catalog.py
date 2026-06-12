@@ -70,6 +70,11 @@ VN_ARTIST_CATALOG = {
     "pham cung":               ("Phạm Cung",                 1926, 2018),
     "tran luu hau":            ("Trần Lưu Hậu",              1928, 2020),
     "luu cong nhan":           ("Lưu Công Nhân",             1929, 2007),
+    "ho quang":                ("Hồ Quảng",                  1929, 2022),
+    "nguyen trong kiem":       ("Nguyễn Trọng Kiệm",         1934, 1991),
+    "tran van tho":            ("Trần Văn Thọ",              1917, 2004),
+    "dinh minh":               ("Đinh Minh",                 1917, None),
+    "dinh xuan minh":          ("Đinh Minh",                 1917, None),  # full-name alias
     "le thiet cuong":          ("Lê Thiết Cương",            1962, None),
     "pham kim binh":           ("Phạm Kim Bình",             1930, 2014),
 

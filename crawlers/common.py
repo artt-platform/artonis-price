@@ -33,6 +33,12 @@ def log_crawl_run(conn, source, target_slug=None, started_at=None, finished_at=N
 
 
 _NÉ_EN_RE = re.compile(r"\s*\(\s*n[ée]\s+en\s+(\d{4})\s*\)?", re.IGNORECASE)
+# (Sinh YYYY) / (Sinh năm YYYY) — Vietnamese "born YYYY"
+_SINH_RE = re.compile(r"\s*\(\s*sinh(?:\s+n[aă]m)?\s+(\d{4})\s*\)?", re.IGNORECASE)
+# ( VIỆT NAM YYYY - YYYY ) — Lê Auction provenance suffix
+_VN_YEARS_RE = re.compile(r"\s*\(\s*VI[EỆ]T\s*NAM\s+(\d{4})\s*[-–]\s*(\d{4})\s*\)", re.IGNORECASE)
+# (YYYY-?) — birth year, alive (death unknown)
+_PLAIN_YEARS_OPEN_RE = re.compile(r"\s*\(\s*(\d{4})\s*[-–]\s*\?\s*\)")
 _XX_RE = re.compile(r"\s*\(?\s*(?:xxe?|xx\s*eme|xxeme|xx\s+si[eè]cle|xxe?\s*si[eè]cle)\s*\)?", re.IGNORECASE)
 _SLASH_YEARS_RE = re.compile(r"\s*\(\s*(\d{4})\s*/\s*\d{2,4}\s*[-–]\s*(\d{4})\s*\)")
 _C_YEARS_RE = re.compile(r"\s*\(\s*c\.?\s*(\d{4})\s*[-–]\s*(\d{4})\s*\)", re.IGNORECASE)  # (C.1914-1976)
@@ -99,6 +105,29 @@ def clean_artist_name(name):
         if birth is None:
             birth = int(m.group(1))
         s = _NÉ_EN_RE.sub("", s).strip()
+
+    # (Sinh YYYY) — Vietnamese "born YYYY"
+    m = _SINH_RE.search(s)
+    if m:
+        if birth is None:
+            birth = int(m.group(1))
+        s = _SINH_RE.sub("", s).strip()
+
+    # ( VIỆT NAM YYYY - YYYY ) — Lê Auction provenance suffix
+    m = _VN_YEARS_RE.search(s)
+    if m:
+        if birth is None:
+            birth = int(m.group(1))
+        if death is None:
+            death = int(m.group(2))
+        s = _VN_YEARS_RE.sub("", s).strip()
+
+    # (YYYY-?) — birth year, death unknown
+    m = _PLAIN_YEARS_OPEN_RE.search(s)
+    if m:
+        if birth is None:
+            birth = int(m.group(1))
+        s = _PLAIN_YEARS_OPEN_RE.sub("", s).strip()
 
     # Plain (YYYY-YYYY) — most common at G&D / Bonhams
     m = _PLAIN_YEARS_RE.search(s)
