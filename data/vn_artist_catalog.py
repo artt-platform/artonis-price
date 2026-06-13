@@ -89,6 +89,12 @@ VN_ARTIST_CATALOG = {
     "kim khanh":               ("Kim Khánh",                 1953, None),  # real: Nguyễn Văn Hương
     "thanh le":                ("Thành Lễ",                  1919, 2003),  # workshop founded by Nguyễn Thành Lễ
     "nguyen thanh le":         ("Thành Lễ",                  1919, 2003),  # workshop alias
+    "bang si nguyen":          ("Bàng Sĩ Nguyên",            1925, 2016),  # real: Bàng Khởi Phụng — also poet
+    "tu duyen":                ("Tú Duyên",                  1915, 2012),
+    "pham thuc chuong":        ("Phạm Thúc Chương",          1918, 1971),
+    "do dinh hiep":            ("Đỗ Đình Hiệp",              1914, 1972),
+    "pham ha hai":             ("Phạm Hà Hải",               1974, None),
+    "vo lang":                 ("Võ Lăng",                   1921, 2005),  # alt: Jean Volang (catalog 'jean volang')
     "le thiet cuong":          ("Lê Thiết Cương",            1962, None),
     "pham kim binh":           ("Phạm Kim Bình",             1930, 2014),
 
