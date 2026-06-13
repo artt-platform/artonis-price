@@ -81,6 +81,14 @@ VN_ARTIST_CATALOG = {
     "nguyen phuoc":            ("Nguyễn Phước",              1943, None),
     "nguyen khai":             ("Nguyên Khai",               1940, None),
     "ton that dao":            ("Tôn Thất Đào",              1910, 1979),
+    "pham viet song":          ("Phạm Viết Song",            1917, 2005),
+    "nang hien":               ("Năng Hiển",                 1921, 2014),
+    "linh chi":                ("Linh Chi",                  1921, 2016),  # real: Nguyễn Tài Lương
+    "trinh nha":               ("Trịnh Nhã",                 1938, None),
+    "bui tuan thanh":          ("Bùi Tuấn Thanh",            1941, None),
+    "kim khanh":               ("Kim Khánh",                 1953, None),  # real: Nguyễn Văn Hương
+    "thanh le":                ("Thành Lễ",                  1919, 2003),  # workshop founded by Nguyễn Thành Lễ
+    "nguyen thanh le":         ("Thành Lễ",                  1919, 2003),  # workshop alias
     "le thiet cuong":          ("Lê Thiết Cương",            1962, None),
     "pham kim binh":           ("Phạm Kim Bình",             1930, 2014),
 
