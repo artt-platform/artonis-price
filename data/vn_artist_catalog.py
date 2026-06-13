@@ -95,6 +95,31 @@ VN_ARTIST_CATALOG = {
     "do dinh hiep":            ("Đỗ Đình Hiệp",              1914, 1972),
     "pham ha hai":             ("Phạm Hà Hải",               1974, None),
     "vo lang":                 ("Võ Lăng",                   1921, 2005),  # alt: Jean Volang (catalog 'jean volang')
+    "jean volang":             ("Võ Lăng",                   1921, 2005),  # French name alias
+    "jean louis paguenaud":    ("Jean-Louis Paguenaud",      1876, 1952),  # space variant (no hyphen)
+    "le huy hoa":              ("Lê Huy Hòa",                1932, 1997),
+    "ton that van":            ("Tôn Thất Văn",              1939, 2006),
+    "le lam":                  ("Lê Lam",                    1931, 2022),  # real: Vũ Quốc Ái
+    "nguyen nghia duyen":      ("Nguyễn Nghĩa Duyện",        1943, None),
+    "nguyen tien dung":        ("Nguyễn Tiến Dũng",          1987, None),
+    "doan xuan tang":          ("Đoàn Xuân Tặng",            1977, None),
+    "dao thanh dzuy":          ("Đào Thành Dzuy",            None, None),
+    "ta thi thanh tam":        ("Tạ Thị Thanh Tâm",          1960, None),
+    "thai van ngon":           ("Thái Văn Ngôn",             1920, None),
+    "dinh tho":                ("Đinh Thọ",                  1931, None),
+    "to phuong":               ("Tố Phượng",                 1936, None),
+    "truong van y":            ("Trương Văn Ý",              1935, None),
+    "ngo the tan":             ("Ngô Thế Tân",               1910, None),
+    "nguyen van duc":          ("Nguyễn Văn Đức",            1971, None),
+    "nguyen van luu":          ("Nguyễn Văn Lưu",            1957, None),
+    "do manh cuong":           ("Đỗ Mạnh Cương",             1940, None),
+    "song ho":                 ("Song Hổ",                   None, None),
+    "tran ha":                 ("Trần Hà",                   1911, 1974),  # alias: Trần Văn Hà workshop
+    "nguyen van thien":        ("Nguyễn Văn Thiện",          None, None),
+    "nguyen tien loi":         ("Nguyễn Tiến Lợi",           1918, 2008),  # primarily war photographer
+    "jean-louis paguenaud":    ("Jean-Louis Paguenaud",      1876, 1952),  # French Navy painter
+    "emmanuel villanis":       ("Emmanuel Villanis",         1858, 1914),  # French Art Nouveau sculptor
+    "rene bassoulet":          ("René Bassoulet",            None, None),  # French travel painter, Indochina
     "le thiet cuong":          ("Lê Thiết Cương",            1962, None),
     "pham kim binh":           ("Phạm Kim Bình",             1930, 2014),
 
