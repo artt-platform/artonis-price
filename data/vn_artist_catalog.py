@@ -57,6 +57,7 @@ VN_ARTIST_CATALOG = {
     "le ba dang":              ("Lê Bá Đảng",                1921, 2015),
     "lebadang":                ("Lê Bá Đảng",                1921, 2015),
     "lebadang le ba dang":     ("Lê Bá Đảng",                1921, 2015),
+    "lebadang":                ("Lê Bá Đảng",                1921, 2015),  # mononym used at Bonhams
     "diem phung thi":          ("Điềm Phùng Thị",            1920, 2002),
     "phung thi":               ("Điềm Phùng Thị",            1920, 2002),
     "diem phung-thi":          ("Điềm Phùng Thị",            1920, 2002),
