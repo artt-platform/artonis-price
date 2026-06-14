@@ -63,6 +63,22 @@ SEED_SALE_URLS = [
     "https://www.tajan.com/fr/auction/2405-art-moderne/",
     "https://www.tajan.com/fr/auction/3229-art-moderne/",
     "https://www.tajan.com/fr/auction/3238-art-moderne/",
+    # ─── Historical expansion (discovered 2026-06-15 via Google + Tajan archive) ──
+    # Older slug-first URLs (pre-2019 era):
+    "https://www.tajan.com/en/auction/asian-art-1407/",
+    "https://www.tajan.com/fr/auction/orient-1406/",
+    "https://www.tajan.com/fr/auction/arts-dorient/",                            # sale 2105
+    "https://www.tajan.com/fr/auction/art-moderne-et-contemporain/",             # sale 2128
+    "https://www.tajan.com/fr/auction/art-moderne-2142/",
+    "https://www.tajan.com/fr/auction/art-contemporain/",                        # sale 2145
+    "https://www.tajan.com/fr/auction/arts-dorient-2147/",
+    "https://www.tajan.com/en/auction/2414-oriental-arts/",
+    "https://www.tajan.com/fr/auction/2433-art-contemporain/",
+    "https://www.tajan.com/en/auction/2439-oriental-arts/",
+    "https://www.tajan.com/fr/auction/3205-art-impressionniste-et-moderne/",
+    # NB: pre-2020 Tajan sales (2016-2019) mostly archived on tajan.auction.fr
+    # subdomain with 5-digit IDs; not reachable via current tajan.com pattern.
+    # That would need a separate crawler.
 ]
 
 

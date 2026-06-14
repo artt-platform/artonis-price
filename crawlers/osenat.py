@@ -63,10 +63,12 @@ def discover_sale_urls(scraper, years=None):
     """For each year, fetch /resultats-ventes-passees?year=YYYY and pull /catalogue/{ID}-{slug}
     links whose slug matches an Asia/Modern keyword. Returns list of (sale_id, slug)."""
     if years is None:
-        # Default: last 4 years. Older sales rarely surface VN-named lots on the
-        # current site (price/desc data thins out before ~2019).
+        # Default: 2016 → current. Pre-2016 Osenat archive is sparse for VN content.
+        # The "Tableaux modernes" + "Art moderne et contemporain" Versailles sales
+        # are the main source of Lê Phổ/Mai Thứ/Vũ Cao Đàm at this house — covered
+        # by _SALE_SLUG_KEYWORDS filter below.
         cur = datetime.utcnow().year
-        years = list(range(cur - 3, cur + 1))
+        years = list(range(2016, cur + 1))
     seen = set()
     keepers = []
     for year in years:
