@@ -473,15 +473,16 @@ def insert_sale_result(conn, record):
     conn.execute(
         """
         insert or replace into sale_results(
-            source, source_url, sale_page_url, lot_number, auction_title, sale_date, sale_location,
+            source, via_platform, source_url, sale_page_url, lot_number, auction_title, sale_date, sale_location,
             artist_id, artist_name_raw, artwork_title, medium, dimensions,
             width_cm, height_cm, area_m2, year,
             estimate_low, estimate_high, hammer_price, price_with_premium, currency,
             price_usd, price_with_premium_usd, price_per_m2_usd, status, provenance, raw_snapshot, scraped_at, kind, support_type
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.get("source", ""),
+            record.get("via_platform"),
             record.get("source_url", ""),
             record.get("sale_page_url", ""),
             record.get("lot_number", ""),

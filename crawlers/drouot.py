@@ -644,8 +644,15 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
             dimensions = _parse_dimensions(desc)
             year_str = _parse_year(artwork_title, desc)
 
+            # Attribute to underlying auctioneer when known; record drouot as
+            # the discovery platform via `via_platform`. Lots without an
+            # auctioneer slug stay attributed to "drouot" so we don't lose them.
+            actual_source = auct_slug or "drouot"
+            via_platform = "drouot" if auct_slug else None
+
             rec = {
-                "source": "drouot",
+                "source": actual_source,
+                "via_platform": via_platform,
                 "source_url": lot_url,
                 "sale_page_url": sale_url,
                 "lot_number": str(lot.get("num") or ""),
