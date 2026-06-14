@@ -89,9 +89,9 @@ def sync_to_supabase(conn, source, since_scraped_at):
         SELECT s.*, a.name as _artist_name
           FROM sale_results s
           LEFT JOIN artists a ON a.id = s.artist_id
-         WHERE s.source = ? AND s.scraped_at >= ?
+         WHERE (s.source = ? OR s.via_platform = ?) AND s.scraped_at >= ?
          ORDER BY s.id
-    """, (source, since_scraped_at)).fetchall()
+    """, (source, source, since_scraped_at)).fetchall()
     if not rows:
         return 0, 0
 
@@ -190,8 +190,8 @@ def main():
             conn.commit()
             dur = time.time() - t0
             new_in_sqlite = conn.execute(
-                "SELECT COUNT(*) FROM sale_results WHERE source = ? AND scraped_at >= ?",
-                (db_source, sentinel)
+                "SELECT COUNT(*) FROM sale_results WHERE (source = ? OR via_platform = ?) AND scraped_at >= ?",
+                (db_source, db_source, sentinel)
             ).fetchone()[0]
             print(f"\n  → {mod_key} done in {dur:.0f}s. {new_in_sqlite} rows touched in SQLite (source={db_source}).")
 
