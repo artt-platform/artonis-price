@@ -16,12 +16,41 @@ SEED_LOT_URLS = [
 # Known Christie's SALE pages (past auctions with price_realised data).
 # Pattern: /en/auction/{slug-SALEID}/. Each page contains 50-100 lots with full data.
 SEED_SALE_URLS = [
-    # Asian 20th Century Art sales (HK)
-    "https://www.christies.com/en/auction/asian-20th-century-art-day-sale-26538/",      # May 2017
-    "https://www.christies.com/en/auction/asian-20th-century-art-evening-sale-26539/",  # May 2017 evening
-    # 20th/21st Century sales (may have VN lots)
-    "https://www.christies.com/en/auction/20th-century-day-sale-30850/",                # Mar 2026
-    "https://www.christies.com/en/auction/20th-century-contemporary-art-evening-sale-30849/",  # Mar 2026 evening
+    # ─── 2017 ─── Asian 20th Century Art (HK) ───
+    "https://www.christies.com/en/auction/asian-20th-century-art-day-sale-26538/",
+    "https://www.christies.com/en/auction/asian-20th-century-art-evening-sale-26539/",
+    # ─── 2019 ─── (Spring & Autumn HK) ───
+    "https://www.christies.com/en/auction/asian-20th-century-contemporary-art-evening-sale-27459/",  # May 2019
+    "https://www.christies.com/en/auction/20th-century-contemporary-art-day-sale-27460/",            # May 2019
+    "https://www.christies.com/en/auction/asian-20th-century-art-day-sale-27461/",                   # Nov 2019
+    "https://www.christies.com/en/auction/20th-century-contemporary-art-morning-session-27462/",     # Nov 2019
+    # ─── 2020 ─── (postponed COVID) ───
+    "https://www.christies.com/en/auction/20th-century-art-day-sale-17793/",                         # Jul 2020 HK
+    "https://www.christies.com/en/auction/20th-century-21st-century-art-evening-sale-18404/",        # Dec 2020 HK
+    "https://www.christies.com/en/auction/20th-century-art-day-sale-18405/",                         # Dec 2020 HK
+    # ─── 2021 ─── (Spring & Autumn HK) ───
+    "https://www.christies.com/en/auction/20th-and-21st-century-art-evening-sale-27997/",            # May 2021 HK
+    "https://www.christies.com/en/auction/20th-and-21st-century-art-morning-session-27995/",         # May 2021 HK Day
+    "https://www.christies.com/en/auction/20th21st-century-art-evening-sale-27998/",                 # Dec 2021 HK
+    "https://www.christies.com/en/auction/20th-century-art-day-sale-27996/",                         # Dec 2021 HK Day
+    # ─── 2022 ─── (Spring & Autumn HK) ───
+    "https://www.christies.com/en/auction/20th-21st-century-art-evening-sale-21393-hgk/",            # May 2022
+    "https://www.christies.com/en/auction/20th-century-art-day-sale-21394-hgk/",                     # May 2022
+    "https://www.christies.com/en/auction/20th-century-art-day-sale-21646-hgk/",                     # Dec 2022
+    # ─── 2023 ─── (Spring & Autumn HK) ───
+    "https://www.christies.com/en/auction/20th-21st-century-art-evening-sale-22107-hgk/",            # May 2023
+    "https://www.christies.com/en/auction/20th-century-art-day-sale-22108-hgk/",                     # May 2023
+    "https://www.christies.com/en/auction/20th-century-art-day-sale-29788/",                         # Nov 2023 HK
+    # ─── 2024 ─── (Spring & Autumn HK — new HQ) ───
+    "https://www.christies.com/en/auction/20th-21st-century-evening-sale-29882/",                    # Sep 2024 HK
+    "https://www.christies.com/en/auction/21st-century-day-sale-29884/",                             # Sep 2024 HK
+    # ─── 2025 ─── ───
+    "https://www.christies.com/en/auction/20th-21st-century-art-evening-sale-24142-hgk/",            # Mar 2025
+    "https://www.christies.com/en/auction/a-quest-for-eternity-the-philippe-damas-collection-24143-hgk/",  # Mar 2025 — 51 VN works
+    "https://www.christies.com/en/auction/20th-century-day-sale-30624/",                             # Sep 2025 HK
+    # ─── 2026 ─── ───
+    "https://www.christies.com/en/auction/20th-century-day-sale-30850/",
+    "https://www.christies.com/en/auction/20th-century-contemporary-art-evening-sale-30849/",
 ]
 
 

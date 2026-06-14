@@ -68,6 +68,40 @@ SEED_SALE_URLS = [
     "https://www.phillips.com/auction/HK010224",  # 1 VN — Vu Cao Dam
     "https://www.phillips.com/auction/HK010326",  # 1 VN — Mai Thu
     "https://www.phillips.com/auction/HK010120",  # 1 VN — Mai Thu
+    # ─── Historical expansion 2016-2026 — all 010-series HK sales from /auctions/past
+    # (discovered 2026-06-15). filter_vn screening will skip empty ones.
+    "https://www.phillips.com/auction/HK010116",
+    "https://www.phillips.com/auction/HK010117",
+    "https://www.phillips.com/auction/HK010119",
+    "https://www.phillips.com/auction/HK010121",
+    "https://www.phillips.com/auction/HK010122",
+    "https://www.phillips.com/auction/HK010123",
+    "https://www.phillips.com/auction/HK010124",
+    "https://www.phillips.com/auction/HK010126",
+    "https://www.phillips.com/auction/HK010218",
+    "https://www.phillips.com/auction/HK010220",
+    "https://www.phillips.com/auction/HK010226",
+    "https://www.phillips.com/auction/HK010317",
+    "https://www.phillips.com/auction/HK010318",
+    "https://www.phillips.com/auction/HK010319",
+    "https://www.phillips.com/auction/HK010320",
+    "https://www.phillips.com/auction/HK010321",
+    "https://www.phillips.com/auction/HK010322",
+    "https://www.phillips.com/auction/HK010323",
+    "https://www.phillips.com/auction/HK010324",
+    "https://www.phillips.com/auction/HK010325",
+    "https://www.phillips.com/auction/HK010417",
+    "https://www.phillips.com/auction/HK010420",
+    "https://www.phillips.com/auction/HK010422",
+    "https://www.phillips.com/auction/HK010425",
+    "https://www.phillips.com/auction/HK010426",
+    "https://www.phillips.com/auction/HK010520",
+    "https://www.phillips.com/auction/HK010521",
+    "https://www.phillips.com/auction/HK010522",
+    "https://www.phillips.com/auction/HK010523",
+    "https://www.phillips.com/auction/HK010524",
+    "https://www.phillips.com/auction/HK010525",
+    "https://www.phillips.com/auction/HK010526",
 ]
 
 

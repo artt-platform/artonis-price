@@ -89,6 +89,7 @@ ALGOLIA_URL = f"https://{ALGOLIA_APP_ID}-dsn.algolia.net/1/indexes/prod_lots/que
 # Pattern: Hong Kong modern sales carry most VN lots; NY/Paris/London near-zero.
 # Ranked by VN lot count (screening date 2026-04-23).
 SEED_SALE_URLS = [
+    # ─── Known high-VN sales (ranked by VN lot count, 2026-04-23 screen) ──────
     "https://www.sothebys.com/en/buy/auction/2023/modern-day-auction",               # 28 VN — 2023-04-06 HK
     "https://www.sothebys.com/en/buy/auction/2022/modern-day-auction-3",              # 25 VN — 2022-10-06 HK
     "https://www.sothebys.com/en/buy/auction/2023/modern-day-auction-3",              # 18 VN — 2023-10-06 HK
@@ -97,6 +98,19 @@ SEED_SALE_URLS = [
     "https://www.sothebys.com/en/buy/auction/2025/modern-contemporary-day-auction",   # 9 VN — 2025-09-29 HK
     "https://www.sothebys.com/en/buy/auction/2023/modern-evening-auction-2",          # 4 VN — 2023-04-05 HK
     "https://www.sothebys.com/en/buy/auction/2025/modern-contemporary-evening-auction",  # 2 VN — 2025-03-29 HK
+    # ─── Historical 2018-2022 expansion (auto-discovered 2026-06-15 from /results) ──
+    "https://www.sothebys.com/en/buy/auction/2019/modern-and-contemporary-southeast-asian-art-online",
+    "https://www.sothebys.com/en/buy/auction/2020/modern-and-contemporary-southeast-asian-art-day-sale",
+    "https://www.sothebys.com/en/buy/auction/2020/modern-art-day-sale",
+    "https://www.sothebys.com/en/buy/auction/2021/modern-art-day-sale",
+    "https://www.sothebys.com/en/buy/auction/2021/modern-art-day-sale-2",
+    "https://www.sothebys.com/en/buy/auction/2022/modern-art-day-sale",
+    "https://www.sothebys.com/en/buy/auction/2024/modern-contemporary-day-auction-session-1-contemporary-art",
+    "https://www.sothebys.com/en/buy/auction/2024/modern-contemporary-day-auction-session-2-modern-art",
+    "https://www.sothebys.com/en/buy/auction/2025/modern-contemporary-day-sale",
+    "https://www.sothebys.com/en/buy/auction/2026/modern-contemporary-discoveries",
+    "https://www.sothebys.com/en/buy/auction/2026/modern-day-auction-4-2",
+    "https://www.sothebys.com/en/buy/auction/2026/asian-art-5000-years-pf2657",
 ]
 
 
