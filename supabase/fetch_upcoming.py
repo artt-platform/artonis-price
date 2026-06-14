@@ -254,6 +254,46 @@ def fetch_phillips():
     return out
 
 
+def _extract_sale_date(html):
+    """Find earliest future YYYY-MM-DD on page. Prefers schema.org startDate."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    m_start = re.search(r'"startDate"\s*:\s*"(20\d{2}-\d{2}-\d{2})', html)
+    if m_start:
+        d = m_start.group(1)
+        if d >= today:
+            return d
+    dates = sorted(set(re.findall(r'(20\d{2}-\d{2}-\d{2})', html)))
+    future = [d for d in dates if d >= today]
+    return future[0] if future else None
+
+
+def enrich_sale_dates(rows):
+    """For each row missing sale_date, fetch page and try to extract one.
+    Skips on network error (date is optional)."""
+    scraper = _scraper()
+    for r in rows:
+        if r.get("sale_date"):
+            continue
+        try:
+            resp = scraper.get(r["sale_page_url"], timeout=20)
+            if resp.status_code == 200:
+                d = _extract_sale_date(resp.text)
+                if d:
+                    r["sale_date"] = d
+        except Exception:
+            pass
+
+
+def prune_past_auctions():
+    """Delete upcoming_auctions rows whose sale_date has passed (cleanup stale)."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    rsp = requests.delete(
+        f"{URL}/rest/v1/upcoming_auctions?sale_date=lt.{today}",
+        headers=H, timeout=30,
+    )
+    print(f"Prune past auctions (<{today}): HTTP {rsp.status_code}")
+
+
 def main():
     fetchers = (
         ("christies", fetch_christies),
@@ -274,12 +314,19 @@ def main():
         except Exception as e:
             print(f"  {name:<10}: ERROR {e}", flush=True)
 
+    if all_rows:
+        print(f"\nEnriching {len(all_rows)} rows with sale_date…", flush=True)
+        enrich_sale_dates(all_rows)
+        with_date = sum(1 for r in all_rows if r.get("sale_date"))
+        print(f"  → {with_date}/{len(all_rows)} got a sale_date", flush=True)
+
     now_iso = datetime.utcnow().isoformat() + "Z"
     for r in all_rows:
         r["scraped_at"] = now_iso
 
     if not all_rows:
         print("\nNo upcoming rows scraped.")
+        prune_past_auctions()
         return
 
     rsp = requests.post(
@@ -289,6 +336,8 @@ def main():
     print(f"\nUpsert {len(all_rows)} rows: HTTP {rsp.status_code}")
     if rsp.status_code not in (200, 201, 204):
         print(rsp.text[:400])
+
+    prune_past_auctions()
 
 
 if __name__ == "__main__":

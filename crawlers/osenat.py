@@ -390,33 +390,52 @@ def parse_lot_description(desc_text):
                       "", head, flags=re.IGNORECASE)
         lines = [first[:artist_match_end], head, tail_meta]
 
-    # Artwork title: pick the FIRST substantive line after the artist header.
-    # Osenat lots usually have no separate title — the description IS the title
-    # (e.g. "Panneau horizontal en bois laqué représentant une panthère noire…").
-    # So we keep medium-keyword lines as titles when they are descriptive (≥1 comma
-    # or ≥40 chars). We DO still skip pure boiler-plate lines like "Signed",
-    # "Provenance", "Dim. NN x NN cm", or short inscription/note fragments.
+    # Artwork title: first try « ... » quoted title (Vietnamese art lots at Osenat use
+    # French guillemets to bracket the canonical title, e.g.
+    #   « Vue lacustre animée de jonques parmi les brumes »).
+    # If absent, fall back to the first substantive line after the artist header.
+    quoted = None
     for cand in lines[1:8]:
         c = cand.strip(" *,;:")
-        if not c:
-            continue
-        low = c.lower()
-        if re.match(r"^(?:dim\.|signed|sign[ée]|provenance|note|bibliographie|"
-                    r"r[éE]f[éE]rence|\(grande|\(petit|\(craquelure)", c, re.IGNORECASE):
-            continue
-        if re.search(r"\d+(?:[.,]\d+)?\s*[x×]\s*\d+(?:[.,]\d+)?\s*cm", c, re.IGNORECASE):
-            continue
-        if c.startswith("«") or c.startswith("\""):
-            # Inscription / signature transcript — skip.
-            continue
-        # Often artwork title ends with ", YYYY"
-        m_yr = re.search(r"^(.+?),\s*(\d{4})\s*$", c)
+        m_q = re.match(r"«\s*(.+?)\s*»", c)
+        if m_q:
+            quoted = m_q.group(1).strip(" .,;:")
+            break
+        # Stop at first non-blank line that isn't a quote — quoted title (if any)
+        # always comes right after the artist header.
+        if c and not c.startswith("("):
+            break
+    if quoted:
+        out["artwork_title"] = quoted[:300]
+        # Try to detect year embedded
+        m_yr = re.search(r",\s*(\d{4})\s*$", quoted)
         if m_yr:
-            out["artwork_title"] = m_yr.group(1).strip()[:300]
-            out["year"] = m_yr.group(2)
-        else:
-            out["artwork_title"] = c[:300]
-        break
+            out["artwork_title"] = quoted[:m_yr.start()].strip(" .,;:")[:300]
+            out["year"] = m_yr.group(1)
+    else:
+        # Osenat lots without quoted titles: the description IS the title
+        # (e.g. "Panneau horizontal en bois laqué représentant une panthère noire…").
+        # We keep medium-keyword lines as titles when they are descriptive (≥1 comma
+        # or ≥40 chars). We DO still skip pure boiler-plate lines like "Signed",
+        # "Provenance", "Dim. NN x NN cm", or short inscription/note fragments.
+        for cand in lines[1:8]:
+            c = cand.strip(" *,;:")
+            if not c:
+                continue
+            if re.match(r"^(?:dim\.|signed|sign[ée]|provenance|note|bibliographie|"
+                        r"r[éE]f[éE]rence|\(grande|\(petit|\(craquelure)", c, re.IGNORECASE):
+                continue
+            if re.search(r"\d+(?:[.,]\d+)?\s*[x×]\s*\d+(?:[.,]\d+)?\s*cm", c, re.IGNORECASE):
+                continue
+            if c.startswith("\""):
+                continue
+            m_yr = re.search(r"^(.+?),\s*(\d{4})\s*$", c)
+            if m_yr:
+                out["artwork_title"] = m_yr.group(1).strip()[:300]
+                out["year"] = m_yr.group(2)
+            else:
+                out["artwork_title"] = c[:300]
+            break
 
     # Medium line — first line with a medium keyword
     for cand in lines[1:10]:

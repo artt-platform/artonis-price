@@ -212,7 +212,7 @@ VN_ARTIST_CATALOG = {
     # ===== DIASPORA / French-Vietnamese =====
     "pierre le-tan":           ("Pierre Lê-Tân",             1950, 2019),
     "pierre le tan":           ("Pierre Lê-Tân",             1950, 2019),
-    "jean volang":             ("Jean Volang",               1921, 2009),
+    # NB: "jean volang" alias defined earlier (line 99) → maps to Võ Lăng (1921-2005)
     "vu dinh khoi":            ("Vũ Đình Khôi",              None, None),
     "nam thai":                ("Nam Thái",                  -20, None),  # -20 = Thế kỷ 20
     "duc loi":                 ("Atelier Duc-Loi",           None, None),
