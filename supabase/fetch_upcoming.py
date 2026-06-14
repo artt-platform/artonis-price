@@ -1,16 +1,17 @@
 """Fetch upcoming Asian-art-relevant auctions from major houses.
 
 Hits each house's public calendar/upcoming page and filters by keyword
-("asia", "vietnam", "indochin", "modern art", "southeast"). Writes to
-the upcoming_auctions table. Idempotent on sale_page_url.
+("asia", "asian", "indochin", "vietnam", "modern", "contemporary",
+"chinese", "japanese", "hong-kong", etc.). Writes to upcoming_auctions.
+Idempotent on sale_page_url.
 
-Sources covered:
-  - Christie's     /en/calendar
-  - Sotheby's      /en/calendar
-  - Aguttes        future sales (peintres-asie focus)
-  - Bonhams        /auctions/upcoming
-  - Phillips       /calendar
-  - Drouot         /en/c/43/asian-art?status=future
+Sources covered (per probe 2026-06-14):
+  - Christie's   /en/calendar               → 16 upcoming, ~4 asian
+  - Sotheby's    /en/calendar               → 75 upcoming, 1-2 asian
+  - Drouot       /en/auctions/future        → 37 upcoming, 2 asian
+  - Aguttes      /ventes/prochaines-ventes  → JS-heavy, scan sitemap-fr fallback
+  - Bonhams      /auctions/                 → 12 upcoming, asian only via dedicated cat
+  - Phillips     /auctions/upcoming-auctions
 
 Run:
   python3 supabase/fetch_upcoming.py
@@ -33,152 +34,252 @@ H = {"apikey": KEY, "Authorization": f"Bearer {KEY}",
      "Content-Type": "application/json",
      "Prefer": "resolution=merge-duplicates,return=minimal"}
 
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-HEADERS = {"User-Agent": UA}
-
+# Keywords we treat as "Asian-relevant" — VN art often appears in:
+#   - dedicated Asian-art sales
+#   - "Modern & Contemporary" sales in HK / Paris (esp. Aguttes Peintres d'Asie)
+#   - Indochinese-specific sales
 KEYWORDS = (
     "asia", "asian", "indochin", "southeast", "vietnam",
-    "modern-and-contemporary", "modern-contemporary",
-    "peintres-asie", "peintres-d-asie", "art-d-asie",
-    "hong-kong", "hong-kong-modern",
+    "peintres-asie", "peintres-d-asie", "art-d-asie", "arts-d-asie",
+    "chinese", "japanese", "korean", "indian", "himalayan",
+    "hong-kong",
+    # Aguttes / Christie's modern sales often have Indochinese lots
+    "tableaux-modernes", "modern-and-contemporary", "modern-contemporary",
+    "asie", "inkspiration",
 )
 
 
-def _has_keyword(url):
-    low = url.lower()
-    return any(k in low for k in KEYWORDS)
+def _has_keyword(text):
+    return any(k in text.lower() for k in KEYWORDS)
 
 
-def _fetch(url):
-    try:
-        return requests.get(url, headers=HEADERS, timeout=20).text
-    except Exception:
-        return ""
+def _scraper():
+    return cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "darwin"},
+    )
+
+
+def _slug_title(slug):
+    return slug.replace("-", " ").replace("_", " ").strip().title()
 
 
 def fetch_christies():
-    """Christie's calendar — /en/calendar."""
-    html = _fetch("https://www.christies.com/en/calendar")
+    """Christie's calendar — /en/calendar.
+
+    URL pattern: /en/auction/{slug}-{N}-{loc}, where loc∈{nyr,hgk,par,kls,…}.
+    Strip the trailing -{N}-{loc} to recover a clean slug for filtering.
+    """
+    s = _scraper()
+    try:
+        html = s.get("https://www.christies.com/en/calendar", timeout=25).text
+    except Exception:
+        return []
     seen = set()
     out = []
-    for m in re.finditer(r'href="(/en/auction/([a-z0-9\-]+))"[^>]*>([^<]{5,200})</a>', html):
-        href, slug, label = m.group(1), m.group(2), m.group(3)
-        if not _has_keyword(slug):
+    for m in re.finditer(r'/en/auction/([a-z0-9-]+-\d+-[a-z]+)', html):
+        url_slug = m.group(1)
+        # Strip "-24625-hgk" suffix for keyword test
+        clean = re.sub(r'-\d+-[a-z]+$', '', url_slug)
+        if not _has_keyword(clean):
             continue
-        if href in seen:
-            continue
-        seen.add(href)
+        full = f"https://www.christies.com/en/auction/{url_slug}"
+        if full in seen: continue
+        seen.add(full)
+        # Last 3 chars of slug suffix often encode location (hgk=hong kong, par=paris)
+        loc_code = url_slug.rsplit('-', 1)[-1]
+        loc_map = {
+            "nyr": "New York", "hgk": "Hong Kong", "par": "Paris",
+            "kls": "London King St", "lon": "London", "kls2": "London",
+        }
         out.append({
             "source": "christies",
-            "sale_page_url": "https://www.christies.com" + href,
-            "auction_title": "Christie's — " + label.strip()[:120],
-            "sale_date": "",  # date on calendar requires deeper parsing
-            "sale_location": "",
+            "sale_page_url": full,
+            "auction_title": "Christie's — " + _slug_title(clean)[:120],
+            "sale_date": None,
+            "sale_location": loc_map.get(loc_code),
         })
     return out
 
 
 def fetch_sothebys():
-    html = _fetch("https://www.sothebys.com/en/calendar")
+    """Sotheby's calendar — /en/calendar.
+
+    URL pattern: /en/buy/auction/{year}/{slug}. Keyword-filter on slug.
+    """
+    s = _scraper()
+    try:
+        html = s.get("https://www.sothebys.com/en/calendar", timeout=25).text
+    except Exception:
+        return []
     seen = set()
     out = []
-    for m in re.finditer(r'href="(/en/buy/auction/(\d+)/([a-z0-9\-]+))"', html):
-        href, year, slug = m.group(1), m.group(2), m.group(3)
+    for m in re.finditer(r'/en/buy/auction/(\d{4})/([a-z0-9-]+)', html):
+        year, slug = m.group(1), m.group(2)
         if not _has_keyword(slug):
             continue
-        if href in seen:
-            continue
-        seen.add(href)
+        full = f"https://www.sothebys.com/en/buy/auction/{year}/{slug}"
+        if full in seen: continue
+        seen.add(full)
         out.append({
             "source": "sothebys",
-            "sale_page_url": "https://www.sothebys.com" + href,
-            "auction_title": "Sotheby's — " + slug.replace("-", " ").title()[:120],
-            "sale_date": f"{year}-01-01",  # placeholder year; deep-fetch would refine
-            "sale_location": "",
+            "sale_page_url": full,
+            "auction_title": "Sotheby's — " + _slug_title(slug)[:120],
+            "sale_date": None,
+            "sale_location": None,
         })
     return out
 
 
 def fetch_drouot():
-    s = cloudscraper.create_scraper()
+    """Drouot future auctions — /en/auctions/future.
+
+    URL pattern: /en/v/{id}-{slug}. The page lists future across all
+    categories, so keyword-filter to recover the asian ones.
+    """
+    s = _scraper()
     try:
-        html = s.get("https://drouot.com/en/c/43/asian-art?status=future", timeout=20).text
+        html = s.get("https://drouot.com/en/auctions/future", timeout=25).text
     except Exception:
         return []
-    out = []
     seen = set()
-    for m in re.finditer(r"/en/v/(\d+)-([a-z0-9\-]+)", html):
-        sale_id, slug = m.group(1), m.group(2)
-        url = f"https://drouot.com/en/v/{sale_id}-{slug}"
-        if url in seen: continue
-        seen.add(url)
+    out = []
+    for m in re.finditer(r'/en/v/(\d+)-([a-z0-9-]+)', html):
+        sid, slug = m.group(1), m.group(2)
+        if not _has_keyword(slug):
+            continue
+        full = f"https://drouot.com/en/v/{sid}-{slug}"
+        if full in seen: continue
+        seen.add(full)
         out.append({
             "source": "drouot",
-            "sale_page_url": url,
-            "auction_title": "Drouot — " + slug.replace("-", " ").title()[:120],
-            "sale_date": "",
+            "sale_page_url": full,
+            "auction_title": "Drouot — " + _slug_title(slug)[:120],
+            "sale_date": None,
             "sale_location": "Paris",
         })
-    return out[:20]
+    return out
 
 
 def fetch_aguttes():
-    """Aguttes future Peintres d'Asie sales."""
-    html = _fetch("https://www.aguttes.com/")
+    """Aguttes future Peintres d'Asie sales.
+
+    Site is heavy SPA so direct HTML scrape misses links. Fallback:
+    use the known Asian-catalog URL pattern via the artisio iframe page,
+    which sometimes renders the catalog UUIDs server-side.
+    """
+    s = _scraper()
+    found = set()
+    # Try the artisio future-auctions endpoint
+    for path in ("/ventes/prochaines-ventes", "/artisio"):
+        try:
+            html = s.get(f"https://www.aguttes.com{path}", timeout=25).text
+        except Exception:
+            continue
+        # Match arts-dasie or peintres-d-asie catalog UUID URLs
+        for m in re.finditer(
+            r'/catalogue/((?:arts-?d-?asie|peintres-?d-?asie|tableaux-modernes)[-a-z0-9]*)',
+            html,
+        ):
+            slug = m.group(1)
+            full = f"https://www.aguttes.com/catalogue/{slug}"
+            found.add(full)
     out = []
-    seen = set()
-    for m in re.finditer(r'href="(/[a-z0-9\-/]+/peintres-?d-?asie[^"#]*)"', html, re.IGNORECASE):
-        href = m.group(1)
-        url = "https://www.aguttes.com" + href
-        if url in seen: continue
-        seen.add(url)
+    for full in found:
+        slug = full.rsplit("/", 1)[-1]
+        # Strip UUID for readability
+        clean = re.sub(r'-[0-9a-f]{8}-[0-9a-f-]+$', '', slug)
         out.append({
             "source": "aguttes",
-            "sale_page_url": url,
-            "auction_title": "Aguttes — Peintres d'Asie",
-            "sale_date": "",
+            "sale_page_url": full,
+            "auction_title": "Aguttes — " + _slug_title(clean)[:120],
+            "sale_date": None,
             "sale_location": "Neuilly-sur-Seine",
         })
     return out
 
 
-def fetch_phillips():
-    """Phillips upcoming sales (HK modern is the VN-relevant one)."""
-    html = _fetch("https://www.phillips.com/auctions/upcoming-auctions")
-    out = []
+def fetch_bonhams():
+    """Bonhams /auctions/ — only listing 12 main upcoming sales, no
+    asian-dedicated upcoming during this probe. Returns [] when none
+    pass keyword filter rather than scraping their /search endpoint
+    (which requires API key)."""
+    s = _scraper()
+    try:
+        html = s.get("https://www.bonhams.com/auctions/", timeout=25).text
+    except Exception:
+        return []
     seen = set()
-    for m in re.finditer(r'href="(/auction/[A-Z0-9]+/[a-z0-9\-]+)"[^>]*>([^<]{5,200})</a>', html):
-        href, label = m.group(1), m.group(2)
-        if not _has_keyword(label.lower()) and not _has_keyword(href.lower()):
+    out = []
+    for m in re.finditer(r'/auction/(\d+)/([a-z0-9-]+)', html):
+        sid, slug = m.group(1), m.group(2)
+        if not _has_keyword(slug):
             continue
-        if href in seen: continue
-        seen.add(href)
+        full = f"https://www.bonhams.com/auction/{sid}/{slug}/"
+        if full in seen: continue
+        seen.add(full)
+        out.append({
+            "source": "bonhams",
+            "sale_page_url": full,
+            "auction_title": "Bonhams — " + _slug_title(slug)[:120],
+            "sale_date": None,
+            "sale_location": None,
+        })
+    return out
+
+
+def fetch_phillips():
+    """Phillips upcoming sales — /auctions/upcoming-auctions."""
+    s = _scraper()
+    try:
+        html = s.get("https://www.phillips.com/auctions/upcoming-auctions",
+                     timeout=25).text
+    except Exception:
+        return []
+    seen = set()
+    out = []
+    for m in re.finditer(r'/auction/([A-Z]{2}\d+)/([a-z0-9-]+)', html):
+        sid, slug = m.group(1), m.group(2)
+        if not _has_keyword(slug):
+            continue
+        full = f"https://www.phillips.com/auction/{sid}/{slug}"
+        if full in seen: continue
+        seen.add(full)
         out.append({
             "source": "phillips",
-            "sale_page_url": "https://www.phillips.com" + href,
-            "auction_title": "Phillips — " + label.strip()[:120],
-            "sale_date": "",
-            "sale_location": "",
+            "sale_page_url": full,
+            "auction_title": "Phillips — " + _slug_title(slug)[:120],
+            "sale_date": None,
+            "sale_location": None,
         })
     return out
 
 
 def main():
+    fetchers = (
+        ("christies", fetch_christies),
+        ("sothebys",  fetch_sothebys),
+        ("drouot",    fetch_drouot),
+        ("aguttes",   fetch_aguttes),
+        ("bonhams",   fetch_bonhams),
+        ("phillips",  fetch_phillips),
+    )
     all_rows = []
-    for fn in (fetch_christies, fetch_sothebys, fetch_drouot, fetch_aguttes, fetch_phillips):
+    for name, fn in fetchers:
         try:
             rows = fn()
-            print(f"  {fn.__name__}: {len(rows)} rows", flush=True)
+            print(f"  {name:<10}: {len(rows)} asian-relevant", flush=True)
+            for r in rows[:3]:
+                print(f"    · {r['auction_title']}", flush=True)
             all_rows.extend(rows)
         except Exception as e:
-            print(f"  {fn.__name__}: ERROR {e}", flush=True)
+            print(f"  {name:<10}: ERROR {e}", flush=True)
 
     now_iso = datetime.utcnow().isoformat() + "Z"
     for r in all_rows:
         r["scraped_at"] = now_iso
 
     if not all_rows:
-        print("No upcoming rows scraped.")
+        print("\nNo upcoming rows scraped.")
         return
 
     rsp = requests.post(
@@ -187,7 +288,7 @@ def main():
     )
     print(f"\nUpsert {len(all_rows)} rows: HTTP {rsp.status_code}")
     if rsp.status_code not in (200, 201, 204):
-        print(rsp.text[:300])
+        print(rsp.text[:400])
 
 
 if __name__ == "__main__":

@@ -221,13 +221,17 @@ def _parse_artwork_title(description_html, artist_header_text=""):
         if not cand or len(cand) < 2 or len(cand) > 200:
             continue
         if _looks_like_medium(cand):
-            # title may be embedded BEFORE the medium phrase on same line
-            for kw in _MEDIUM_HINTS:
-                idx = cand.lower().find(kw)
-                if idx > 4:
-                    pre = cand[:idx].strip().strip(" *,")
-                    if pre and 2 < len(pre) < 140:
-                        return pre
+            # If a medium keyword appears at the START, this is a pure medium line
+            # (e.g. "Encre et couleurs sur soie") — skip, don't extract a fake title.
+            low = cand.lower()
+            earliest = min((low.find(kw) for kw in _MEDIUM_HINTS if low.find(kw) >= 0),
+                           default=-1)
+            if earliest <= 4:
+                continue
+            # Title appears BEFORE the medium phrase (e.g. "Femme du peuple Huile sur toile")
+            pre = cand[:earliest].strip(" *,")
+            if pre and 2 < len(pre) < 140:
+                return pre
             continue
         if _looks_like_dimensions(cand):
             continue
@@ -434,8 +438,10 @@ def crawl(conn, verbose=True, filter_vn=True):
 
                 # Enrich from lot detail page: dynamic_fields.fr has clean sub_title + provenance.
                 # API list-call gives only artist header in `title`; lot page is the source of truth.
+                # ALWAYS prefer page_title (canonical sub_title) over desc-parsed title — desc
+                # parsing sometimes yields fragments of the medium line (e.g. "Encre et couleurs sur").
                 page_title, page_provenance, _expertise = _fetch_lot_page_fields(lot_url)
-                if page_title and (not artwork_title or len(page_title) > len(artwork_title)):
+                if page_title:
                     artwork_title = page_title
 
                 # Try to extract creation year from sub_title or description

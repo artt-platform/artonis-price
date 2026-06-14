@@ -186,13 +186,21 @@ def parse_lot(doc):
             h = _to_cm(m_in.group(4), m_in.group(5), m_in.group(6))
             dimensions = f"{w} x {h} cm"
             break
+        # F: sculpture-style single dimension "H: 50.5 cm" or "Height NN cm"
+        m_h = re.search(
+            r"(?:H|Height|L|W|Length|Width)\.?\s*:?\s*(\d+(?:[.,]\d+)?)\s*cm",
+            src, re.IGNORECASE,
+        )
+        if m_h:
+            dimensions = f"H {m_h.group(1).replace(',','.')} cm"
+            break
 
     # Medium: usually 1-2 lines before dimensions in catalogDesc
     medium = ""
     if catalog_desc_plain:
         # Look for English medium pattern: "[medium] NN x NN cm"
         m_med = re.search(
-            r"\b((?:oil|acrylic|watercolou?r|ink|gouache|pencil|charcoal|pastel|lacquer|silk|gold|eggshell|canvas|wood|paper|panel|mixed media)[^<]{0,120}?)\s*\d+(?:[.,]\d+)?\s*(?:[x×]|by)",
+            r"\b((?:oil|acrylic|watercolou?r|ink|gouache|pencil|charcoal|pastel|lacquer|silk|gold|eggshell|canvas|wood|paper|panel|mixed media|bronze|patinated)[^<]{0,120}?)\s*\d+(?:[.,]\d+)?\s*(?:[x×]|by)",
             catalog_desc_plain, re.IGNORECASE
         )
         if m_med:
@@ -205,6 +213,14 @@ def parse_lot(doc):
             )
             if m_med2:
                 medium = clean_text(m_med2.group(1))[:150]
+        if not medium:
+            # Sculpture-style: medium followed by single dimension "H: 50.5 cm" or "Height NN cm"
+            m_sculp = re.search(
+                r"\b((?:bronze|patinated\s+bronze|mixed\s+media|wood|carved\s+wood|terracotta|ceramic|marble|stone|plaster|resin|cast\s+iron)[^<]{0,120}?)\s*(?:H|Height|L|W)\.?\s*:?\s*\d+(?:[.,]\d+)?\s*cm",
+                catalog_desc_plain, re.IGNORECASE
+            )
+            if m_sculp:
+                medium = clean_text(m_sculp.group(1))[:150]
 
     # Price + currency
     price = doc.get("price") or {}
@@ -247,6 +263,30 @@ def parse_lot(doc):
         if m_prov:
             provenance = clean_text(m_prov.group(1))[:500]
 
+    # Kind detection from medium + dimensions shape:
+    #   - sculpture: bronze/wood/marble/stone/terracotta/ceramic/resin/mixed media + single dim
+    #   - print: lithograph/etching/screenprint/estampe/gravure
+    #   - drawing: pencil/charcoal/ink/encre/crayon/fusain on paper without paint medium
+    #   - default: painting
+    kind = "painting"
+    medium_l = (medium or "").lower()
+    desc_l = (catalog_desc_plain or "").lower()
+    is_single_dim = dimensions.startswith("H ") or dimensions.startswith("L ") or dimensions.startswith("W ")
+    sculpture_kws = ("bronze", "patinated", "carved wood", "mixed media on wood",
+                     "terracotta", "ceramic", "marble", "stone", "plaster", "resin",
+                     "cast iron", "sculpture")
+    print_kws = ("lithograph", "etching", "screenprint", "estampe", "gravure", "engraving",
+                 "silkscreen", "serigraph", "woodcut")
+    drawing_kws = ("pencil", "graphite", "crayon", "fusain", "charcoal", "sanguine")
+    if any(kw in medium_l for kw in sculpture_kws) or (is_single_dim and "wood" in medium_l):
+        kind = "sculpture"
+    elif any(kw in medium_l for kw in print_kws) or any(kw in desc_l for kw in print_kws):
+        kind = "print"
+    elif any(kw in medium_l for kw in drawing_kws) and "oil" not in medium_l and "huile" not in medium_l:
+        # Drawing only if no paint medium AND on paper-like support
+        if "paper" in medium_l or "papier" in medium_l:
+            kind = "drawing"
+
     sale_page_url = f"https://www.bonhams.com/auction/{auction_id}/" if auction_id else ""
     return {
         "source": "bonhams",
@@ -260,6 +300,7 @@ def parse_lot(doc):
         "artwork_title": artwork_title,
         "medium": medium,
         "dimensions": dimensions,
+        "kind": kind,
         "year": year_str,
         "estimate_low": est_low,
         "estimate_high": est_high,

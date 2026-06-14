@@ -119,7 +119,6 @@ VN_ARTIST_CATALOG = {
     "nguyen van thien":        ("Nguyễn Văn Thiện",          None, None),
     "nguyen tien loi":         ("Nguyễn Tiến Lợi",           1918, 2008),  # primarily war photographer
     "jean-louis paguenaud":    ("Jean-Louis Paguenaud",      1876, 1952),  # French Navy painter
-    "emmanuel villanis":       ("Emmanuel Villanis",         1858, 1914),  # French Art Nouveau sculptor
     "rene bassoulet":          ("René Bassoulet",            None, None),  # French travel painter, Indochina
     "le thiet cuong":          ("Lê Thiết Cương",            1962, None),
     "pham kim binh":           ("Phạm Kim Bình",             1930, 2014),
@@ -380,6 +379,7 @@ NON_VN_EXCLUSIONS = {
     "adrien-jean le mayeur de merprès", "adrien-jean le mayeur",
     "adrien jean le mayeur de merpres",
     "louis rollet", "charles jules duvent", "aladar farkas",
+    "emmanuel villanis",  # French Art Nouveau sculptor, no Indochina link
     # Japan
     "yayoi kusama",
     # Chinese-French / Chinese

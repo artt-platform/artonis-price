@@ -100,6 +100,12 @@ jobs:
         run: |
           python3 supabase/refresh_artist_stats.py
 
+      - name: Fetch upcoming auctions
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 supabase/fetch_upcoming.py
+
       - name: Summary
         if: always()
         run: |
