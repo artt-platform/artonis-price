@@ -628,17 +628,17 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
                 status = "sold"
                 hammer = result
             else:
-                # Upcoming / unsold — use estimate midpoint as proxy (matches
-                # Invaluable's policy for non-realised lots) and tag distinctly.
-                if low_est and high_est:
-                    hammer = (low_est + high_est) / 2.0
-                elif low_est:
-                    hammer = low_est
-                elif high_est:
-                    hammer = high_est
-                else:
-                    continue  # nothing usable
-                status = "estimate_only"
+                # No hammer price reported. Distinguish:
+                #   - Sale date is in the future → SKIP (it's a still-open
+                #     timed auction; the "hammer = estimate midpoint" trick
+                #     misleads readers into thinking it sold).
+                #   - Sale date is past → keep as "passed" / unsold record
+                #     with no price (no fake midpoint).
+                today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if sale_date and sale_date >= today_iso:
+                    continue  # still open — let upcoming_auctions handle it
+                status = "passed"
+                hammer = None
 
             medium = _parse_medium(desc)
             dimensions = _parse_dimensions(desc)
