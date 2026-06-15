@@ -386,17 +386,21 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
         for rec in records:
             # Fetch lot detail for artist name + title + dimensions
             details = _fetch_lot_details(scraper, rec["lot_url"])
-            # Extract artist from meta desc: "Lot N - ARTIST NAME (YYYY-YYYY) Title Medium Dims"
+            # Skip attribution lots — works "after / d'après / attribué à / et son atelier"
+            # are NOT original by the named artist. Detected in URL lot slug
+            # (e.g. .../lot12-le-quoc-loc-1918-1987-attribue) or in the meta desc.
+            url_low = (rec["lot_url"] or "").lower()
+            if re.search(r"-(?:attribue|attribue-a|et-son-atelier|et-atelier|d-apres|atelier-de|ecole-de|entourage-de|cercle-de|cours-de|after)(?:-|$)", url_low):
+                continue
             meta = details.get("meta_desc", "")
+            if re.search(r"\b(?:Attribu[eé](?:\s+[àa])?|D['’]?Apr[èe]s|Et\s+Son\s+Atelier|Attributed\s+To|After\s+|Circle\s+of|Follower\s+of|Studio\s+of|Workshop\s+of|Manner\s+of)\b",
+                         meta, re.IGNORECASE):
+                continue
+            # Extract artist from meta desc: "Lot N - ARTIST NAME (YYYY-YYYY) Title Medium Dims"
             m_art = re.search(r"Lot\s+\d+\s*[-–]\s*([A-ZÀ-Ÿ][A-ZÀ-Ÿa-zà-ÿ\s\-']{2,50}?)\s*\(", meta)
             artist_raw = m_art.group(1).strip().title() if m_art else rec["slug_artist"].replace("-", " ").title()
-            # Strip trailing years/digits from slug-based names (e.g. "Le Pho 1907 Paris 2001")
+            # Strip trailing years/digits from slug-based names
             artist_raw = re.sub(r"\s+(?:1[89]\d{2}|20[0-2]\d)(?:\s+.*)?$", "", artist_raw).strip()
-            # Strip French/English suffix junk + Né en / XXe variants (handled by clean_artist_name)
-            artist_raw = re.sub(r"\s+(?:D'?Apr[eè]s|Apr[eè]s|Attribu[eé](?:\s+[aà])?|Attributed\s+To|Et\s+Son\s+Atelier)$",
-                                "", artist_raw, flags=re.IGNORECASE).strip()
-            # Strip leading symbols / artist variants
-            artist_raw = re.sub(r"^(?:Attribué À|D'Après|Après|Attributed To)\s+", "", artist_raw, flags=re.IGNORECASE).strip()
             # Centralised cleanup: (Né en YYYY), (XXe siècle), (1919/22-2016), * prefix
             artist_raw, _alt_birth = clean_artist_name(artist_raw)
 

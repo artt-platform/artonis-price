@@ -28,6 +28,28 @@ from crawlers.common import (
 
 BASE = "https://drouot.com"
 
+# Attribution-prefix detection — these lots are NOT original works by the
+# named artist (workshop pieces, after-prints, attributed, etc.). Skip them
+# so they don't appear under the artist's profile.
+_ATTRIBUTION_RE = re.compile(
+    r"(?:^|-)("
+    r"after|d-apres|attribue|attribue-a|et-son-atelier|et-atelier|"
+    r"atelier-de|ecole-de|entourage-de|cours-de|cercle-de|"
+    r"circle-of|follower-of|school-of|manner-of|in-the-manner-of"
+    r")(?:-|$)",
+    re.IGNORECASE,
+)
+_ATTRIBUTION_RAW_RE = re.compile(
+    r"^\s*("
+    r"after\s+|d['’']apr[èe]s|attribu[eé]\s+[àa]|attribu(?:ted|é)\s+to|"
+    r"atelier\s+de\s+|école\s+de\s+|ecole\s+de\s+|entourage\s+de\s+|"
+    r"cercle\s+de\s+|cours\s+de\s+|"
+    r"circle\s+of\s+|follower\s+of\s+|school\s+of\s+|"
+    r"in\s+the\s+manner\s+of\s+|manner\s+of\s+"
+    r")",
+    re.IGNORECASE,
+)
+
 # Drouot's Asian Art category id; covers Indochine / Chinese / Japanese / Korean lots.
 ASIAN_ART_CAT = 43
 
@@ -603,6 +625,14 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
                 continue
             artist_raw, _alt_birth = clean_artist_name(artist_raw)
             if not artist_raw:
+                continue
+
+            # Skip attribution lots (not original works by the artist):
+            #   "after X", "d'après X", "attribué à X", "atelier de X",
+            #   "école de X", "entourage de X", "circle of X", etc.
+            # Detected in the lot slug ("after-mai-thu", "le-pho-attribue")
+            # OR in the raw artist string itself.
+            if _ATTRIBUTION_RE.search(lot_slug) or _ATTRIBUTION_RAW_RE.match(artist_raw):
                 continue
 
             if filter_vn and not _is_vietnamese(artist_raw, vn_catalog, exclusions):
