@@ -90,6 +90,10 @@ def extract_lots_from_page(url, verbose=False):
     except Exception:
         return []
 
+    # Christie's serves UTF-8 but doesn't always set the charset header; requests
+    # then falls back to Latin-1 which mojibakes French diacritics
+    # (é → Ã©, è → Ã¨, etc.). Force UTF-8.
+    r.encoding = "utf-8"
     text = r.text
     records = []
 
