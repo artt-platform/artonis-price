@@ -1,27 +1,50 @@
 """Global Auction crawler — Indonesian/SEA house at global.auction.
 
-Public catalog uses URL pattern:
-  /event/YYYY/MM/{slug}/{auction_id}/products?page=N
-Lots:
-  /event/YYYY/MM/lot/{lot_no}/{type}/{date}/{code}/{artist_id}/{artist-slug}/{title-slug}
+Discovery:
+  - sitemap.xml exposes /event/{YYYY}/{MM}/{slug}/{event_id}/products URLs
+    for currently-listed sales (typically 2-4 most recent).
 
-Lot pages embed currency (SGD/IDR/USD), estimate range, and artist+title in the <title> tag.
+Parsing strategy:
+  - Each event page is a Livewire component. POST to /livewire/update with
+    updates={limitLot: 200} returns ALL lot cards in a single HTML chunk
+    (Global Auction sales cap around 200 lots).
+  - Each card contains: artist, title, estimate range, and — for closed
+    sales — a green "SOLD : SGD XXX,XXX" badge.
+
+Status mapping:
+  - SOLD badge present → status='sold' with real hammer price.
+  - SOLD badge absent → SKIP. Either the auction hasn't reported results
+    yet, or the lot was withdrawn / unsold. Don't synthesise a fake price.
 """
 import re
+import json
+import html as html_lib
 import time
-import requests
-from urllib.parse import urlparse
+from datetime import datetime, timezone
 
-from crawlers.common import insert_sale_result, clean_text, parse_amount, log_crawl_run
+import cloudscraper
+
+from crawlers.common import insert_sale_result, clean_text, log_crawl_run
 
 
-HEADERS = {
+BASE = "https://global.auction"
+HEADERS_GET = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                  "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
 }
 
+# Approx FX → USD (rough; refresh occasionally)
+FX_TO_USD = {"USD": 1.0, "SGD": 0.74, "IDR": 0.000061, "HKD": 0.128,
+             "EUR": 1.08, "MYR": 0.21}
 
-# ---- VN filter --------------------------------------------------------------
+
+def _make_scraper():
+    return cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "darwin"}
+    )
+
+
+# ─── VN filter ───────────────────────────────────────────────────────────────
 
 def _load_vn():
     import sys
@@ -47,262 +70,240 @@ def _is_vietnamese(artist_raw, vn_catalog, exclusions):
     return False
 
 
-# ---- Discovery: list catalog pages -----------------------------------------
+# ─── Discovery ───────────────────────────────────────────────────────────────
 
-# Known past auctions (manually curated; user gave us the 2026-01 example)
-DEFAULT_CATALOG_URLS = [
-    "https://global.auction/event/2026/01/global-auction-southeast-asian-chinese-modern-contemporary-art-auction-14-31-jan-2026/1093/products",
-    # The other 3 from earlier discovery — IDs from bid.global.auction:
-    # 1-BZKK1C, 1-C1LWLS, 1-C7HP0Q. We need the global.auction-side numeric ID.
-    # For now, rely on caller to supply URLs or scrape the past-events page.
-]
+_EVENT_RE = re.compile(
+    r"https://global\.auction/event/(\d{4})/(\d{1,2})/"
+    r"([a-z0-9-]+)/(\d+)/products"
+)
 
 
-def list_past_catalogs(limit=20):
-    """Find past auction catalog URLs from global.auction. Returns list of /event/.../products URLs."""
-    r = requests.get("https://global.auction/", headers=HEADERS, timeout=20)
+def discover_events(scraper):
+    """Pull current event URLs from sitemap.xml. Returns list of dicts."""
+    try:
+        r = scraper.get(f"{BASE}/sitemap.xml", timeout=20)
+    except Exception:
+        return []
     if r.status_code != 200:
         return []
-    # URLs to past events look like /stories/2026/MM/... but we want /event/YYYY/MM/{slug}/{id}/products
-    # The home page links to /stories. Past events live under another nav. Try /past-auctions or /events.
-    for path in ["/past-auctions", "/events", "/auctions", "/event"]:
-        rr = requests.get("https://global.auction" + path, headers=HEADERS, timeout=15)
-        if rr.status_code == 200:
-            urls = re.findall(r'/event/\d{4}/\d{1,2}/[a-z0-9\-]+/\d+/products', rr.text)
-            if urls:
-                return ["https://global.auction" + u for u in sorted(set(urls))[:limit]]
-    return []
+    seen = {}
+    for m in _EVENT_RE.finditer(r.text):
+        y, mo, slug, eid = m.groups()
+        # Skip the lot-URL pattern (slug == "lot")
+        if slug == "lot":
+            continue
+        seen[eid] = {
+            "event_id": eid,
+            "year": y, "month": mo, "slug": slug,
+            "url": f"{BASE}/event/{y}/{mo}/{slug}/{eid}/products",
+        }
+    return sorted(seen.values(), key=lambda e: (e["year"], e["month"], e["event_id"]))
 
 
-def list_lots_from_catalog(catalog_url, max_pages=15):
-    """Paginate ?page=N until no new lot URLs appear."""
-    all_lots = set()
-    base = catalog_url.split("?")[0]
-    for pg in range(1, max_pages + 1):
-        url = f"{base}?page={pg}" if pg > 1 else base
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=25)
-        except Exception:
-            break
-        if r.status_code != 200:
-            break
-        # The catalog page is server-rendered with Livewire, but lot links are in HTML.
-        # Pattern: /event/YYYY/MM/lot/N/<type>/<date>/<code>/<artist-id>/<artist-slug>/<title-slug>
-        lots = set(re.findall(r'/event/\d{4}/\d{1,2}/lot/\d+/[a-z0-9]+/\d+/[a-z0-9]+/\d+/[a-z0-9\-]+/[a-z0-9\-]+', r.text))
-        new = lots - all_lots
-        if not new:
-            # If catalog uses JS, page=1 may be all; need Playwright fallback
-            break
-        all_lots |= lots
-    return sorted(all_lots)
+# ─── Livewire fetch + parsing ────────────────────────────────────────────────
+
+_CARD_RE = re.compile(
+    r'<a href="(https?://global\.auction/event/[^"]*?/lot/[^"]+)">'
+    r"[\s\S]*?<h3[^>]*>([^<]+)</h3>"
+    r"[\s\S]*?<h4[^>]*>([^<]+?)<"
+    r"[\s\S]*?<b>Est\.</b>\s*([A-Z]{3})\s*([\d,]+)\s*-\s*([\d,]+)"
+    r"([\s\S]{0,500})"
+)
+_SOLD_RE = re.compile(r"SOLD\s*:\s*([A-Z]{3})\s*([\d,]+(?:\.\d+)?)")
+_LOT_URL_RE = re.compile(
+    r"/event/(\d{4})/(\d{1,2})/lot/(\d+)/[a-z0-9]+/(\d{8})/"
+    r"[a-z0-9]+/\d+/([a-z0-9-]+)/([a-z0-9-]+)"
+)
 
 
-def list_lots_via_playwright(catalog_url, max_pages=25):
-    """Use Playwright to render server-side + paginate by ?page=N (Livewire)."""
-    from playwright.sync_api import sync_playwright
-    all_lots = set()
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(user_agent=HEADERS["User-Agent"], viewport={"width": 1400, "height": 900})
-        page = ctx.new_page()
-        base = catalog_url.split("?")[0]
-        for pg in range(1, max_pages + 1):
-            url = f"{base}?page={pg}" if pg > 1 else base
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            except Exception:
-                break
-            page.wait_for_timeout(2500)
-            for _ in range(3):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                page.wait_for_timeout(800)
-            hrefs = page.eval_on_selector_all(
-                'a[href*="/event/"][href*="/lot/"]',
-                'els => els.map(e => e.getAttribute("href"))',
-            )
-            new = set(hrefs) - all_lots
-            if not new:
-                break
-            all_lots |= set(hrefs)
-        browser.close()
-    return sorted(all_lots)
+def fetch_event_lots(scraper, event_url, limit=200):
+    """One Livewire request → all lot cards. Returns list of dicts."""
+    try:
+        r = scraper.get(event_url, timeout=25, headers=HEADERS_GET)
+    except Exception:
+        return []
+    if r.status_code != 200:
+        return []
 
+    m_csrf = re.search(r'name="csrf-token"\s+content="([^"]+)"', r.text)
+    m_snap = re.search(r'wire:snapshot="([^"]+)"', r.text)
+    if not (m_csrf and m_snap):
+        return []
+    csrf = m_csrf.group(1)
+    snap = html_lib.unescape(m_snap.group(1))
 
-# ---- Lot page parsing ------------------------------------------------------
-
-_PRICE_PATS = [
-    # "SGD 6,800 - 9,200" (HTML strips show currency once before low-high)
-    (r"(SGD|IDR|USD|HKD|EUR|MYR)\s*\$?([\d,]+(?:\.\d+)?)\s*[-–]\s*\$?([\d,]+(?:\.\d+)?)", None),
-]
-
-
-def parse_lot_page(html, lot_url):
-    """Parse a global.auction lot detail page → record dict (or None)."""
-    # Title tag: "Bui Huu Hung, Landscape In Red 0 | GLOBAL AUCTION ..."
-    m_title = re.search(r"<title>([^<]+)</title>", html)
-    if not m_title:
-        return None
-    title_full = clean_text(m_title.group(1))
-    # Take everything before " | "
-    head = title_full.split(" | ")[0].strip()
-    # Strip trailing " 0" / paddle-prefix that some pages have
-    head = re.sub(r"\s+\d+\s*$", "", head).strip()
-    # "Artist, Title" → split
-    if "," in head:
-        artist_raw, artwork = head.split(",", 1)
-        artist_raw = artist_raw.strip()
-        artwork = artwork.strip()
-    else:
-        artist_raw, artwork = head, ""
-
-    # Estimate: strip HTML first so whitespace between currency and amount collapses
-    plain = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
-    est_low = est_high = None
-    currency = "USD"
-    # Look for "Estimate: <CUR> low - high" specifically
-    m_est_block = re.search(r"Estimate:\s*([A-Z]{3})\s*([\d,]+(?:\.\d+)?)\s*[-–]\s*([\d,]+(?:\.\d+)?)", plain, re.IGNORECASE)
-    if m_est_block:
-        try:
-            currency = m_est_block.group(1).upper()
-            est_low = float(m_est_block.group(2).replace(",", ""))
-            est_high = float(m_est_block.group(3).replace(",", ""))
-        except ValueError:
-            pass
-    if est_low is None:
-        # Fallback: any currency-prefixed range
-        for pat, _ in _PRICE_PATS:
-            m = re.search(pat, plain, re.IGNORECASE)
-            if m:
-                try:
-                    currency = m.group(1).upper()
-                    est_low = float(m.group(2).replace(",", ""))
-                    est_high = float(m.group(3).replace(",", ""))
-                    break
-                except (ValueError, IndexError):
-                    pass
-
-    # Dimensions: look for "WxH cm" pattern
-    m_dim = re.search(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*cm", html, re.IGNORECASE)
-    dimensions = f"{m_dim.group(1)} x {m_dim.group(2)} cm" if m_dim else ""
-
-    # Date — extract from URL: /event/2026/01/lot/.../20260103/...
-    m_date = re.search(r"/event/(\d{4})/(\d{1,2})/lot/\d+/[a-z0-9]+/(\d{8})/", lot_url)
-    if m_date:
-        d8 = m_date.group(3)
-        sale_date = f"{d8[:4]}-{d8[4:6]}-{d8[6:8]}"
-    else:
-        sale_date = ""
-
-    # Hammer: Global Auction frequently doesn't expose hammer publicly post-sale.
-    # If we can find it, great; else use estimate midpoint as proxy.
-    hammer = None
-    m_h = re.search(r"(?:Hammer|Sold|Realised)[^<]{0,30}?([\d,]+(?:\.\d+)?)", html, re.IGNORECASE)
-    if m_h:
-        try:
-            hammer = float(m_h.group(1).replace(",", ""))
-        except ValueError:
-            pass
-    if not hammer and est_low and est_high:
-        hammer = round((est_low + est_high) / 2, 2)
-
-    return {
-        "artist_name_raw": artist_raw,
-        "artwork_title": artwork,
-        "dimensions": dimensions,
-        "sale_date": sale_date,
-        "estimate_low": est_low,
-        "estimate_high": est_high,
-        "hammer_price": hammer,
-        "currency": currency,
+    payload = {
+        "components": [{"snapshot": snap, "updates": {"limitLot": limit}, "calls": []}],
+        "_token": csrf,
     }
+    headers = {
+        "Content-Type": "application/json",
+        "X-CSRF-TOKEN": csrf,
+        "X-Livewire": "1",
+        "Referer": event_url,
+        "User-Agent": HEADERS_GET["User-Agent"],
+    }
+    try:
+        r2 = scraper.post(f"{BASE}/livewire/update", json=payload, headers=headers, timeout=45)
+    except Exception:
+        return []
+    if r2.status_code != 200:
+        return []
+    try:
+        h = json.loads(r2.text)["components"][0]["effects"]["html"]
+    except Exception:
+        return []
+
+    cards = []
+    seen_urls = set()
+    for m in _CARD_RE.finditer(h):
+        url, artist, title, cur, low, high, tail = m.groups()
+        if url in seen_urls:
+            # Each card appears twice in the HTML (mobile + desktop variants)
+            continue
+        seen_urls.add(url)
+
+        sold_m = _SOLD_RE.search(tail)
+        sold_amt = (
+            float(sold_m.group(2).replace(",", "")) if sold_m else None
+        )
+        sold_cur = sold_m.group(1) if sold_m else None
+
+        # Sale date from URL: /event/YYYY/MM/lot/N/.../{YYYYMMDD}/...
+        sale_date = ""
+        m_url = _LOT_URL_RE.search(url)
+        if m_url:
+            d8 = m_url.group(4)
+            sale_date = f"{d8[:4]}-{d8[4:6]}-{d8[6:8]}"
+
+        cards.append({
+            "url": url,
+            "artist_raw": html_lib.unescape(artist).strip(),
+            "title": html_lib.unescape(title).strip(),
+            "estimate_currency": cur,
+            "estimate_low": float(low.replace(",", "")),
+            "estimate_high": float(high.replace(",", "")),
+            "sold_currency": sold_cur,
+            "sold_price": sold_amt,
+            "sale_date": sale_date,
+        })
+    return cards
 
 
-# ---- Main crawl entry ------------------------------------------------------
+# ─── Lot detail enrichment (optional) ────────────────────────────────────────
 
-def crawl(conn, catalog_urls=None, delay=1.0, verbose=True, filter_vn=True, use_playwright=True):
-    """Crawl Global Auction catalogs. catalog_urls = list of /event/.../products URLs.
-    If None, uses DEFAULT_CATALOG_URLS."""
-    catalog_urls = catalog_urls or DEFAULT_CATALOG_URLS
+def _enrich_from_lot_page(scraper, lot_url):
+    """Fetch lot page → extract medium + dimensions. Returns dict."""
+    try:
+        r = scraper.get(lot_url, timeout=20, headers=HEADERS_GET)
+    except Exception:
+        return {}
+    if r.status_code != 200:
+        return {}
+    out = {}
+    m_dim = re.search(
+        r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*cm",
+        r.text, re.IGNORECASE,
+    )
+    if m_dim:
+        out["dimensions"] = f"{m_dim.group(1)} x {m_dim.group(2)} cm"
+    m_med = re.search(
+        r"\b(oil on canvas|acrylic on canvas|ink on (?:silk|paper)|"
+        r"gouache on (?:silk|paper)|watercolou?r on (?:silk|paper)|"
+        r"mixed media on (?:canvas|paper|wood)|"
+        r"lacquer on (?:wood|panel)|charcoal on paper|pastel on paper|"
+        r"bronze|terracotta)\b",
+        r.text, re.IGNORECASE,
+    )
+    if m_med:
+        out["medium"] = m_med.group(0).lower()
+    return out
+
+
+# ─── Main ────────────────────────────────────────────────────────────────────
+
+def crawl(conn, event_urls=None, delay=1.0, verbose=True, filter_vn=True,
+          max_pages=20, enrich_details=True):
+    """Crawl Global Auction past events. Returns total inserted."""
+    scraper = _make_scraper()
     vn_catalog, exclusions = _load_vn() if filter_vn else ({}, set())
 
+    if event_urls is None:
+        events = discover_events(scraper)
+        if verbose:
+            print(f"  [global_auction] discovered {len(events)} events", flush=True)
+        event_urls = [e["url"] for e in events]
+    event_urls = list(event_urls)[:max_pages]
+
     total_inserted = 0
-    from datetime import datetime
-    for i, cat in enumerate(catalog_urls, 1):
-        run_started = datetime.utcnow().isoformat() + "Z"
+    for i, event_url in enumerate(event_urls, 1):
+        run_started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if verbose:
-            print(f"\n  [{i}/{len(catalog_urls)}] {cat}", flush=True)
-        if use_playwright:
-            lots = list_lots_via_playwright(cat)
-        else:
-            lots = list_lots_from_catalog(cat)
+            print(f"\n  [{i}/{len(event_urls)}] {event_url[-70:]}", flush=True)
+
+        cards = fetch_event_lots(scraper, event_url)
+        sold_cards = [c for c in cards if c["sold_price"]]
         if verbose:
-            print(f"    found {len(lots)} lots", flush=True)
-        date_min = date_max = None
+            print(f"    {len(cards)} lots, {len(sold_cards)} sold", flush=True)
 
-        # Auction title from URL slug
-        m = re.match(r"https://global\.auction/event/\d{4}/\d{1,2}/([a-z0-9\-]+)/(\d+)/products", cat)
-        slug = m.group(1) if m else ""
-        auction_id = m.group(2) if m else ""
-        # Best-effort human title
-        sale_title = (slug.replace("-", " ").title()[:120]) or "Global Auction"
-        sale_page_url = cat
+        inserted_this = 0
+        for c in cards:
+            # Skip lots without a real SOLD price — don't synthesise from estimate.
+            if not c["sold_price"]:
+                continue
+            if filter_vn and not _is_vietnamese(c["artist_raw"], vn_catalog, exclusions):
+                continue
 
-        inserted = 0
-        for lot_path in lots:
-            lot_url = "https://global.auction" + lot_path if lot_path.startswith("/") else lot_path
-            try:
-                r = requests.get(lot_url, headers=HEADERS, timeout=20)
-            except Exception:
-                continue
-            if r.status_code != 200:
-                continue
-            parsed = parse_lot_page(r.text, lot_url)
-            if not parsed or not parsed.get("artist_name_raw"):
-                continue
-            if filter_vn and not _is_vietnamese(parsed["artist_name_raw"], vn_catalog, exclusions):
-                continue
-            if not parsed.get("hammer_price"):
-                continue
-            # Skip fakes
-            text = (parsed["artwork_title"] + " " + parsed["artist_name_raw"]).lower()
-            if re.search(r"\b(d'?apr[eè]s|after|copy|copie|reproduction|estampe|print|lithograph)\b", text):
-                continue
+            currency = c["sold_currency"] or c["estimate_currency"]
+            sold_usd = c["sold_price"] * FX_TO_USD.get(currency, 1.0)
+
+            extra = _enrich_from_lot_page(scraper, c["url"]) if enrich_details else {}
 
             rec = {
                 "source": "global-auction",
-                "source_url": lot_url,
-                "sale_page_url": sale_page_url,
-                "lot_number": (re.search(r"/lot/(\d+)/", lot_url) or [None, ""])[1] if False else (re.search(r"/lot/(\d+)/", lot_url).group(1) if re.search(r"/lot/(\d+)/", lot_url) else ""),
-                "auction_title": f"Global Auction — {sale_title}",
-                "sale_date": parsed["sale_date"],
+                "source_url": c["url"],
+                "sale_page_url": event_url,
+                "auction_title": "Global Auction — Southeast Asian Modern & Contemporary",
+                "sale_date": c["sale_date"] or None,
                 "sale_location": "Singapore",
-                "artist_name_raw": parsed["artist_name_raw"],
-                "artwork_title": parsed["artwork_title"],
-                "medium": "",
-                "dimensions": parsed["dimensions"],
-                "year": "",
-                "estimate_low": parsed["estimate_low"],
-                "estimate_high": parsed["estimate_high"],
-                "hammer_price": parsed["hammer_price"],
+                "artist_name_raw": c["artist_raw"][:200],
+                "artwork_title": c["title"][:300],
+                "medium": extra.get("medium", ""),
+                "dimensions": extra.get("dimensions", ""),
+                "estimate_low": c["estimate_low"],
+                "estimate_high": c["estimate_high"],
+                "hammer_price": c["sold_price"],
                 "price_with_premium": None,
-                "currency": parsed["currency"],
-                "status": "estimate",  # midpoint, not real hammer
-                "provenance": "",
-                "raw_snapshot": (parsed["artist_name_raw"] + " | " + parsed["artwork_title"])[:300],
+                "currency": currency,
+                "price_usd": sold_usd,
+                "price_with_premium_usd": None,
+                "status": "sold",
+                "kind": "painting",
+                "raw_snapshot": f"{c['artist_raw']} | {c['title'][:80]}"[:300],
             }
-            insert_sale_result(conn, rec)
-            inserted += 1
-            sd = parsed.get("sale_date") or ""
-            if sd:
-                if date_min is None or sd < date_min: date_min = sd
-                if date_max is None or sd > date_max: date_max = sd
-            time.sleep(delay)
+            try:
+                insert_sale_result(conn, rec)
+                inserted_this += 1
+                if verbose and inserted_this <= 5:
+                    print(f"      + {c['artist_raw'][:24]:<24} | {c['title'][:30]:<30} | "
+                          f"{currency} {c['sold_price']:>10,.0f} ≈ ${sold_usd:,.0f}", flush=True)
+            except Exception as e:
+                if verbose:
+                    print(f"      ✗ insert err: {e}", flush=True)
+
         conn.commit()
-        log_crawl_run(conn, "global-auction", target_slug=cat, started_at=run_started,
-                      lots_scanned=len(lots), lots_inserted=inserted,
-                      sale_date_min=date_min, sale_date_max=date_max,
-                      status="ok", note=sale_title[:120])
+        log_crawl_run(
+            conn, "global-auction",
+            target_slug=event_url.split("/")[-2],
+            started_at=run_started,
+            lots_scanned=len(cards),
+            lots_inserted=inserted_this,
+            status="ok",
+            note=event_url[-80:],
+        )
         if verbose:
-            print(f"    {inserted} VN inserted", flush=True)
-        total_inserted += inserted
+            print(f"    → {inserted_this} VN inserted", flush=True)
+        total_inserted += inserted_this
+        time.sleep(delay)
+
     return total_inserted
