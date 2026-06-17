@@ -1,5 +1,6 @@
 """Christie's crawler — parses embedded JSON lot data from lot pages.
 Each lot page contains DOM of ~50 related lots with full price data."""
+import json
 import re
 import time
 import requests
@@ -173,10 +174,17 @@ def extract_lots_from_page(url, verbose=False):
 
         blob = text[start:obj_end]
 
-        # Extract fields via regex (safer than JSON.parse due to possible escape issues)
+        # Extract fields via regex (safer than JSON.parse due to possible escape issues).
+        # Decode JSON string escapes (é, \", \\) properly via json.loads — using
+        # encode().decode('unicode_escape') mangles UTF-8 bytes (é → Ã©).
         def extract(key):
             mm = re.search(rf'"{key}":"((?:[^"\\]|\\.)*)"', blob)
-            return mm.group(1).encode().decode('unicode_escape') if mm else ""
+            if not mm:
+                return ""
+            try:
+                return json.loads(f'"{mm.group(1)}"')
+            except (json.JSONDecodeError, ValueError):
+                return mm.group(1)
 
         def extract_num(key):
             mm = re.search(rf'"{key}":"?([\d.]+)"?', blob)
