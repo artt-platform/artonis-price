@@ -110,19 +110,36 @@ def sync_to_supabase(conn, source, since_scraped_at):
         t = t.replace("Đ", "D").replace("đ", "d")
         return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
 
+    # Also load the VN-catalog aliases — these map raw-name variants
+    # ("lebadang", "mai thu", "cao dam vu" ...) to the canonical Vietnamese
+    # name in artists.name. Without this, "Lebadang" sale rows fail to
+    # link because normalize_key("Lebadang") = "lebadang" doesn't match
+    # artists.normalized_name = "le ba dang".
+    catalog_alias_to_canonical = {}
+    try:
+        from data.vn_artist_catalog import VN_ARTIST_CATALOG
+        for alias_norm, (canonical_name, *_rest) in VN_ARTIST_CATALOG.items():
+            canonical_norm = normalize_key(canonical_name)
+            if canonical_norm in name_to_id:
+                catalog_alias_to_canonical[alias_norm] = name_to_id[canonical_norm]
+    except ImportError:
+        pass
+
+    def resolve_artist_id(raw_name):
+        if not raw_name:
+            return None
+        norm = normalize_key(raw_name)
+        return name_to_id.get(norm) or catalog_alias_to_canonical.get(norm)
+
     payload = []
     for r in rows:
         d = dict(r)
         # Drop SQLite-only fields
         for k in ('id', 'created_at', 'updated_at', '_artist_name'):
             d.pop(k, None)
-        # Re-resolve artist_id via normalized_name (SQLite IDs ≠ Supabase IDs)
-        a_name = r['_artist_name']
-        if a_name:
-            sup_aid = name_to_id.get(normalize_key(a_name))
-            d['artist_id'] = sup_aid
-        else:
-            d['artist_id'] = None
+        # Re-resolve artist_id via normalized_name + catalog aliases
+        # (SQLite IDs ≠ Supabase IDs).
+        d['artist_id'] = resolve_artist_id(r['_artist_name'])
         # Validate enums
         status = d.get('status') or 'sold'
         if status not in ('sold', 'passed', 'withdrawn', 'upcoming', 'unknown', 'estimate', 'estimate_only'):
