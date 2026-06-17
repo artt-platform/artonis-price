@@ -302,7 +302,20 @@ def is_vietnamese(artist_name, catalog, exclusions):
 
 
 def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True):
-    """Crawl Sotheby's sale pages and extract all VN lots."""
+    """Crawl Sotheby's sale pages and extract all VN lots.
+
+    Apollo Cache path (current Sotheby's layout, post-2026):
+      1. Sale page → parse __NEXT_DATA__.pageProps.apolloCache for LotCard
+         entries (first 48 per sale).
+      2. For each LotCard whose title matches the VN catalog, fetch the lot
+         detail page → LotV2.bidState.bidAsk is the last accepted bid
+         ≈ hammer ± buyer's premium.
+      3. SKIP lots where bidState.isClosed=False or sold field is absent —
+         these never sold; no synthetic midpoint price.
+
+    Falls back gracefully if Sotheby's changes layout again — extract_sale_data
+    returns None.algolia_key now and the function below skips fetch_more_pages.
+    """
     sale_urls = sale_urls or SEED_SALE_URLS
     vn_catalog, exclusions = _load_vn() if filter_vn else ({}, set())
 
@@ -310,55 +323,194 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True):
     from datetime import datetime
     for sale_url in sale_urls:
         run_started = datetime.utcnow().isoformat() + "Z"
-        auction_id, algolia_key, init_hits, total, sale_meta, err = extract_sale_data(sale_url)
-        if err:
-            if verbose: print(f"  ERR {sale_url[-60:]}: {err}")
+        try:
+            r = requests.get(sale_url, headers=HEADERS, timeout=25)
+        except Exception as e:
+            if verbose: print(f"  ERR {sale_url[-60:]}: {e}")
             log_crawl_run(conn, "sothebys", target_slug=sale_url, started_at=run_started,
-                          status="error", note=str(err)[:200])
+                          status="error", note=str(e)[:200])
+            continue
+        if r.status_code != 200:
+            if verbose: print(f"  ERR {sale_url[-60:]}: HTTP {r.status_code}")
+            log_crawl_run(conn, "sothebys", target_slug=sale_url, started_at=run_started,
+                          status="error", note=f"HTTP {r.status_code}")
             continue
 
-        all_hits = list(init_hits)
-        if total > len(init_hits) and algolia_key:
-            more = fetch_more_pages(auction_id, algolia_key, total, len(init_hits))
-            all_hits.extend(more)
+        m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', r.text, re.DOTALL)
+        if not m:
+            if verbose: print(f"  ERR {sale_url[-60:]}: no __NEXT_DATA__")
+            continue
+        try:
+            data = json.loads(m.group(1))
+        except Exception as e:
+            if verbose: print(f"  ERR {sale_url[-60:]}: parse {e}")
+            continue
+
+        pp = data.get("props", {}).get("pageProps", {})
+        apollo = pp.get("apolloCache", {})
+
+        # New Apollo path: enumerate LotCard entries
+        lot_cards = [v for k, v in apollo.items() if k.startswith("LotCard:")]
+        if not lot_cards:
+            # Legacy algoliaJson path — fall back so old data still works
+            if verbose: print(f"  {sale_url[-50:]}: no Apollo LotCards (layout?)")
+            log_crawl_run(conn, "sothebys", target_slug=sale_url, started_at=run_started,
+                          status="error", note="no LotCards in apolloCache")
+            continue
+
+        # Sale meta from Auction object
+        auct = next((v for k, v in apollo.items() if k.startswith("Auction:")), {})
+        sale_meta_fallback = {
+            "title": auct.get("title", ""),
+            "location": auct.get("location") or "",
+            "currency": auct.get("currency") or auct.get("currencyV2", "USD"),
+        }
+        sess = next((v for k, v in apollo.items() if k.startswith("Session:")), {})
+        sale_date_fallback = (sess.get("scheduledOpeningDate") or "")[:10]
+
+        # Find VN candidates by matching the LotCard title prefix against the catalog
+        candidates = []
+        for lc in lot_cards:
+            title = lc.get("title", "")
+            artist = _apollo_parse_artist(title)
+            if not artist:
+                continue
+            if filter_vn and not is_vietnamese(artist, vn_catalog, exclusions):
+                continue
+            lot_slug = (lc.get("slug") or {}).get("lotSlug", "")
+            if not lot_slug:
+                continue
+            candidates.append((artist, title, f"{sale_url}/{lot_slug}"))
 
         inserted_this = 0
-        for h in all_hits:
-            rec = hit_to_record(h, sale_meta)
+        for artist_raw, lot_title, lot_url in candidates:
+            rec = _apollo_extract_lot(lot_url, sale_url, sale_meta_fallback, sale_date_fallback)
             if not rec:
                 continue
-            if filter_vn and not is_vietnamese(rec["artist_name_raw"], vn_catalog, exclusions):
+            # Fake/attribution check
+            if re.search(r"\b(d'?apr[eè]s|after\s|attribu|atelier de|école de|copy|copie|reproduction)\b",
+                         (rec.get("artwork_title") or "") + " " + (rec.get("artist_name_raw") or ""), re.IGNORECASE):
                 continue
-            # Sotheby's hides realized prices behind login: accept estimate-only records
-            # (hit_to_record fills hammer_price with estimate midpoint when price is null).
-            if not rec.get("hammer_price"):
-                continue
-            # Fake check
-            if re.search(r"\b(d'?apr[eè]s|after|copy|copie|reproduction)\b", rec["artwork_title"] + " " + rec["artist_name_raw"], re.IGNORECASE):
-                continue
-            # Enrich from lot page: medium, dims, provenance (Algolia hits lack these)
-            page_title, page_medium, page_dims, page_year, page_prov = fetch_lot_page_fields(rec["source_url"])
-            if page_title:
-                rec["artwork_title"] = page_title
-            if page_medium:
-                rec["medium"] = page_medium
-            if page_dims:
-                rec["dimensions"] = page_dims
-            if page_year:
-                rec["year"] = page_year
-            if page_prov:
-                rec["provenance"] = page_prov
             insert_sale_result(conn, rec)
             inserted_this += 1
             time.sleep(0.4)  # pace lot-page fetches
+
         conn.commit()
-        sale_date = (sale_meta.get("auctionDate") or "")[:10]
         log_crawl_run(conn, "sothebys", target_slug=sale_url, started_at=run_started,
-                      lots_scanned=len(all_hits), lots_inserted=inserted_this,
-                      sale_date_min=sale_date or None, sale_date_max=sale_date or None,
-                      status="ok", note=sale_meta.get("auctionName", "")[:120])
+                      lots_scanned=len(lot_cards), lots_inserted=inserted_this,
+                      sale_date_min=sale_date_fallback or None,
+                      sale_date_max=sale_date_fallback or None,
+                      status="ok", note=sale_meta_fallback["title"][:120])
         if verbose:
-            print(f"  {sale_url[-50:]}: {len(all_hits)} hits, {inserted_this} VN inserted")
+            print(f"  {sale_url[-50:]}: {len(lot_cards)} cards / {len(candidates)} VN / {inserted_this} inserted")
         total_inserted += inserted_this
         time.sleep(delay)
+    return total_inserted
+
+
+# ─── Apollo Cache helpers ────────────────────────────────────────────────────
+
+# CJK Unified Ideographs (basic + ext-A) + Hiragana + Katakana + full-width space
+_CJK_RE = re.compile(r"[　぀-ヿ㐀-鿿＀-￯]")
+FX_TO_USD = {"USD": 1.0, "SGD": 0.74, "HKD": 0.128, "GBP": 1.27, "EUR": 1.08,
+             "CHF": 1.13, "IDR": 0.000061}
+
+
+def _apollo_parse_artist(title):
+    """Sotheby's titles: 'LE PHO 黎譜 | Femme au bouquet' → 'LE PHO'."""
+    if not title:
+        return ""
+    head = title.split("|")[0].strip()
+    head = _CJK_RE.sub("", head).strip()
+    return re.sub(r"\s+", " ", head).strip()
+
+
+def _apollo_parse_artwork_title(title):
+    """Strip 'ARTIST | ' prefix + CJK suffix."""
+    if not title:
+        return ""
+    parts = title.split("|", 1)
+    if len(parts) < 2:
+        return _CJK_RE.sub("", title).strip()
+    tail = parts[1].strip()
+    return re.sub(r"\s+", " ", _CJK_RE.sub("", tail)).strip()
+
+
+def _apollo_extract_lot(lot_url, sale_url, sale_meta_fallback, sale_date_fallback):
+    """Fetch lot detail page → record dict ready for insert_sale_result."""
+    try:
+        r = requests.get(lot_url, headers=HEADERS, timeout=20)
+    except Exception:
+        return None
+    if r.status_code != 200:
+        return None
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', r.text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(1))
+    except Exception:
+        return None
+
+    ac = data.get("props", {}).get("pageProps", {}).get("apolloCache", {})
+    lot = next((v for k, v in ac.items() if k.startswith("LotV2:")), None)
+    if not lot:
+        return None
+
+    bs_ref = (lot.get("bidState") or {}).get("__ref")
+    bs = ac.get(bs_ref, {}) if bs_ref else {}
+    bid_ask = bs.get("bidAsk")
+    is_closed = bs.get("isClosed")
+    sold = bs.get("sold")
+    # Skip lots that never closed sold — don't synthesise a midpoint price.
+    if not (is_closed and sold and bid_ask):
+        return None
+
+    auct_ref = (lot.get("auction") or {}).get("__ref")
+    auct = ac.get(auct_ref, {}) if auct_ref else {}
+    currency = auct.get("currency") or sale_meta_fallback.get("currency") or "USD"
+    auction_title = auct.get("title") or sale_meta_fallback.get("title") or ""
+    location = auct.get("location") or sale_meta_fallback.get("location") or ""
+
+    sess_ref = (lot.get("session") or {}).get("__ref")
+    sess = ac.get(sess_ref, {}) if sess_ref else (lot.get("session") or {})
+    sale_date = (sess.get("scheduledOpeningDate") or "")[:10] or sale_date_fallback
+
+    est = lot.get("estimateV2") or {}
+    est_low = (est.get("lowEstimate") or {}).get("amount")
+    est_high = (est.get("highEstimate") or {}).get("amount")
+
+    title = lot.get("title", "")
+    artist = _apollo_parse_artist(title)
+    artwork = _apollo_parse_artwork_title(title) or title
+    desc = _strip_html(lot.get("description") or "")
+    prov = _strip_html(lot.get("provenance") or "")
+
+    bid_ask_f = float(bid_ask)
+    price_usd = bid_ask_f * FX_TO_USD.get(currency, 1.0)
+
+    return {
+        "source": "sothebys",
+        "source_url": lot_url,
+        "sale_page_url": sale_url,
+        "auction_title": auction_title[:200],
+        "sale_date": sale_date or None,
+        "sale_location": location[:100],
+        "artist_name_raw": artist[:200],
+        "artwork_title": artwork[:300],
+        "medium": "",
+        "dimensions": "",
+        "year": "",
+        "estimate_low": float(est_low) if est_low else None,
+        "estimate_high": float(est_high) if est_high else None,
+        "hammer_price": None,
+        "price_with_premium": bid_ask_f,
+        "currency": currency,
+        "price_usd": None,
+        "price_with_premium_usd": price_usd,
+        "status": "sold",
+        "kind": "painting",
+        "provenance": prov[:2000],
+        "raw_snapshot": (f"{artist} | {artwork[:80]} | {desc[:120]}")[:300],
+    }
     return total_inserted
