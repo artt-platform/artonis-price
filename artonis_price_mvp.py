@@ -1201,7 +1201,8 @@ def import_metadata_file(conn, local_path, source_drive_path=""):
                 continue
             artist = values.get("hoa si", "") or values.get("artist", "")
             start = values.get("ngay bat dau", "") or values.get("start date", "")
-            drive_path = find_matching_exhibition_drive_path(conn, title, artist)
+            venue = values.get("noi dien ra", "")
+            drive_path = find_matching_exhibition_drive_path(conn, title, artist, venue, start)
             item = {
                 "drive_path": drive_path or f"metadata://{source_drive_path or local.name}/{sheet_name}/{inserted}",
                 "source_bucket": "metadata",
@@ -1228,10 +1229,35 @@ def import_metadata_file(conn, local_path, source_drive_path=""):
     return inserted
 
 
-def find_matching_exhibition_drive_path(conn, title, artist):
+def find_matching_exhibition_drive_path(conn, title, artist, venue="", start_date=""):
+    """Find the canonical Drive-folder exhibition that this metadata row
+    duplicates, so upsert_exhibition can UPDATE the canonical row instead
+    of INSERTing a fresh "metadata://..." one.
+
+    Match heuristics (any one wins):
+      1. Same venue + same start_date — strongest signal. Two real
+         exhibitions almost never open at the same venue on the same day,
+         and the master Excel often paraphrases the title which made the
+         old title-fuzzy match miss.
+      2. Title fuzzy + artist overlap (legacy: ≥4 score).
+    """
     title_key = normalize_key(title)
+    venue_key = normalize_key(venue)
     artist_names = split_artists(artist)
     artist_keys = [normalize_key(name) for name in artist_names]
+
+    # Pass 1: venue + start_date exact match — catches the case the master
+    # spreadsheet paraphrased the title.
+    if venue_key and start_date:
+        for row in conn.execute(
+            "select drive_path, venue, start_date from exhibitions "
+            "where drive_path not like 'metadata://%' and start_date = ?",
+            (start_date,),
+        ):
+            if normalize_key(row["venue"] or "") == venue_key:
+                return row["drive_path"]
+
+    # Pass 2: legacy title-fuzzy + artist scoring.
     best = None
     best_score = 0
     for row in conn.execute("select drive_path, title, artists_text from exhibitions where drive_path not like 'metadata://%'"):
