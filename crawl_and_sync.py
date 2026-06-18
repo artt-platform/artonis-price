@@ -83,6 +83,28 @@ MAX_PAGES = int(os.environ.get('MAX_PAGES', '100'))
 SKIP_SUPABASE = bool(os.environ.get('SKIP_SUPABASE'))
 
 
+def push_crawl_run(source, started_at, finished_at, lots_scanned, lots_inserted, status, note):
+    """Push a crawl_runs row to Supabase so the /admin/cron monitor page sees recent activity."""
+    payload = {
+        'source': source,
+        'started_at': started_at,
+        'finished_at': finished_at,
+        'lots_scanned': int(lots_scanned or 0),
+        'lots_inserted': int(lots_inserted or 0),
+        'status': status,
+        'note': (note or '')[:500] if note else None,
+    }
+    try:
+        r = requests.post(
+            f"{URL}/rest/v1/crawl_runs",
+            headers=H, json=payload, timeout=15,
+        )
+        if r.status_code not in (200, 201, 204):
+            print(f"  ⚠ crawl_runs log failed: HTTP {r.status_code} {r.text[:120]}")
+    except requests.RequestException as e:
+        print(f"  ⚠ crawl_runs log error: {e}")
+
+
 def sync_to_supabase(conn, source, since_scraped_at):
     """Push rows from SQLite scraped/updated since since_scraped_at to Supabase."""
     rows = conn.execute("""
@@ -188,6 +210,7 @@ def main():
         print(f"\n{'='*60}\n▶ {mod_key} (DB source={db_source}, fn={entry_fn})\n{'='*60}")
         # Sentinel: current time before crawl. Rows with scraped_at >= this are new/updated
         sentinel = (datetime.utcnow().replace(microsecond=0)).isoformat()
+        started_at_iso = sentinel + 'Z'  # tag as UTC
         t0 = time.time()
         name = mod_key  # alias for summary
         try:
@@ -218,14 +241,27 @@ def main():
                 _, pushed_count = sync_to_supabase(conn, db_source, sentinel)
                 print(f"  → Pushed {pushed_count}/{new_in_sqlite} to Supabase.")
             summary.append((name, new_in_sqlite, pushed_count, dur, None))
+            # Log to crawl_runs (Supabase) for monitor page
+            finished_at_iso = (datetime.utcnow().replace(microsecond=0)).isoformat() + 'Z'
+            if not SKIP_SUPABASE:
+                push_crawl_run(db_source, started_at_iso, finished_at_iso,
+                               new_in_sqlite, pushed_count, 'ok', f'{mod_key} {dur:.0f}s')
         except KeyboardInterrupt:
             print(f"\n  ✗ Interrupted")
+            if not SKIP_SUPABASE:
+                push_crawl_run(db_source, started_at_iso,
+                               (datetime.utcnow().replace(microsecond=0)).isoformat() + 'Z',
+                               0, 0, 'cancelled', f'{mod_key} interrupted')
             break
         except Exception as e:
             tb = traceback.format_exc()
             print(f"\n  ✗ ERROR: {e}")
             print(tb[:1000])
             summary.append((name, 0, 0, time.time() - t0, str(e)[:200]))
+            if not SKIP_SUPABASE:
+                push_crawl_run(db_source, started_at_iso,
+                               (datetime.utcnow().replace(microsecond=0)).isoformat() + 'Z',
+                               0, 0, 'error', f'{mod_key}: {str(e)[:200]}')
 
     conn.close()
 

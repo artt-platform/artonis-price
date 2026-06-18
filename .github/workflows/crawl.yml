@@ -113,3 +113,34 @@ jobs:
           echo "- Trigger: ${{ github.event_name }} ${{ github.event.schedule }}" >> $GITHUB_STEP_SUMMARY
           echo "- Crawlers: ${{ steps.pick.outputs.crawlers || 'all' }}" >> $GITHUB_STEP_SUMMARY
           echo "- Max pages: ${{ steps.pick.outputs.max_pages }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Heartbeat to Supabase
+        if: always()
+        continue-on-error: true
+        env:
+          SB_URL: ${{ secrets.SUPABASE_URL }}
+          SB_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          STATUS="${{ job.status }}"
+          NOTE="run=${{ github.run_id }} trigger=${{ github.event_name }} schedule=${{ github.event.schedule }}"
+          curl -s -X POST "$SB_URL/rest/v1/crawl_runs" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d "{\"source\":\"_workflow_\",\"status\":\"$STATUS\",\"note\":\"$NOTE\",\"finished_at\":\"$(date -u +%FT%TZ)\"}" \
+            || echo "heartbeat ping failed"
+
+      - name: Open issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Crawl failed (run ${context.runId})`,
+              body: `Daily crawl workflow failed.\n\n**Run:** ${runUrl}\n**Trigger:** ${context.eventName} ${context.payload.schedule || ''}\n**Time:** ${new Date().toISOString()}\n\nCheck the run logs and the [admin monitor page](https://index.artonis.io/admin/cron).`,
+              labels: ['crawler-failure']
+            });
