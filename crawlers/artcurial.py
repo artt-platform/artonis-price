@@ -41,10 +41,17 @@ DEFAULT_YEARS = list(range(2018, datetime.utcnow().year + 1))
 # Sale-slug keywords flagging a sale as potentially containing Vietnamese / Indochina art.
 # The per-lot VN-catalog filter is the authoritative gate; here we cast a wide net.
 _SALE_KEYWORDS = (
-    "asie", "asia", "asian", "asiatique", "indochin", "indochina",
+    # Direct VN/Asian indicators
+    "vietnam", "vietnamien", "vietnamienne",
+    "asie", "asia", "asian", "asiatique", "asiatiques",
+    "indochin", "indochina", "indochinois",
+    "orient", "orientalisme", "orientaliste",
+    # Modern/contemporary buckets where VN names regularly appear
     "art-moderne", "art-modern", "moderne",
+    "contemporain", "contemporary", "post-war",
     "impressionniste", "impressionist",
-    "orient", "orientalisme",
+    "ecole-de-paris",  # Vũ Cao Đàm, Mai Trung Thứ catalogue prefix
+    "peintures-modernes", "modern-paintings",
 )
 
 

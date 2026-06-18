@@ -333,11 +333,26 @@ def fetch_sale_index(verbose=False):
     m = _TRANSACTION_LIST_RE.search(text)
     if not m:
         return {}
-    raw = m.group(1).replace("'", '"')
+    # Ravenel switched the embedded list from JSON-ish to a Python/JS-literal
+    # mix: single-quoted strings, bare `null`/`true`/`false`, `\uXXXX` escapes.
+    # naive `replace("'", '"')` corrupts strings with apostrophes
+    # ("L'art" → "L"art"). Use ast.literal_eval after normalising JS sigils.
+    import ast
+    raw = m.group(1)
+    raw = re.sub(r'\\u([0-9a-fA-F]{4})', lambda mm: chr(int(mm.group(1), 16)), raw)
+    py = (
+        raw.replace(':null', ':None')
+        .replace(':true', ':True')
+        .replace(':false', ':False')
+    )
     try:
-        data = json.loads(raw)
-    except Exception:
-        return {}
+        data = ast.literal_eval(py)
+    except (SyntaxError, ValueError):
+        # Old JSON-ish path as last-ditch fallback
+        try:
+            data = json.loads(raw.replace("'", '"'))
+        except Exception:
+            return {}
     out = {}
     for d in data:
         uid = d.get("auctionUidStr")

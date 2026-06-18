@@ -53,6 +53,21 @@ _ATTRIBUTION_RAW_RE = re.compile(
 # Drouot's Asian Art category id; covers Indochine / Chinese / Japanese / Korean lots.
 ASIAN_ART_CAT = 43
 
+# Full-text keywords that surface Vietnamese-related sales BEYOND the Asian Art
+# category — catches contemporary VN artists (Trương Tân etc.) sold by small
+# Paris houses (Planète des Arts, Beaussant-Lefèvre…) under "Modern" or
+# "Paintings" headers.
+VN_SEARCH_KEYWORDS = [
+    "vietnam",      # broadest, ~40 hits — includes some noise (wine, militaria)
+    "vietnamese",
+    "vietnamien",
+    "indochine",
+    "indochinois",
+    "tonkin",
+    "saigon",
+    "hanoi",
+]
+
 # Auctioneer slugs already covered by their own Artonis crawler. Drouot re-lists
 # their sales (since most member houses also operate independently); skip to avoid
 # inserting the same lot twice via different `source`.
@@ -444,20 +459,26 @@ _SALE_URL_RE = re.compile(r'/[a-z]{2}/v/(\d+)-([a-z0-9\-]+?)(?=[?"])')
 
 
 def discover_asian_sales(scraper, max_pages=20, verbose=False):
-    """Discover Drouot Asian-art sale URLs.
+    """Discover Drouot sale URLs across multiple discovery paths.
 
-    Drouot exposes two sale lists:
-      • /en/auctions/future?categs=43 — upcoming sales, paginated.
-      • /en/auctions/hotel?categs=43  — sales currently at Hôtel Drouot.
-    Both feed into the same sale-id space; we union them. `max_pages` is the
-    TOTAL request budget shared across both lists (cheaper for callers who
-    want a small smoke test).
+    Discovery paths (UNION — each saleId appears at most once):
+      1. /en/auctions/future?categs=43  — upcoming sales tagged Asian Art
+      2. /en/auctions/hotel?categs=43   — sales currently at Hôtel Drouot
+      3. /en/auctions/future?q=<KEYWORD> for each VN keyword
+         (vietnam, vietnamese, vietnamien, indochine, tonkin, saigon, hanoi…).
+         This catches sales that *mention* Vietnamese content in title/lots but
+         aren't filed under the "Asian Art" category — e.g. Planète des Arts
+         selling Trương Tân under "Modern & Contemporary".
+
+    `max_pages` is the TOTAL request budget shared across all paths.
     """
     seen = {}  # saleId -> url
     base_paths = [
         f"/en/auctions/future?categs={ASIAN_ART_CAT}",
         f"/en/auctions/hotel?categs={ASIAN_ART_CAT}",
     ]
+    # Each keyword gets its own discovery pass on /auctions/future.
+    base_paths.extend(f"/en/auctions/future?q={kw}" for kw in VN_SEARCH_KEYWORDS)
     budget = max(1, int(max_pages))
     for base_path in base_paths:
         if budget <= 0:
