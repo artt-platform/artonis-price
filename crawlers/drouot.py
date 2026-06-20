@@ -546,6 +546,70 @@ def parse_sale_page(html_text, sale_url):
     return sale_info, lots
 
 
+# ---- watchlist: track future sales so we can re-fetch results after sale_date ----
+#
+# Drouot's site only exposes /auctions/future and /auctions/hotel (currently happening).
+# Once a sale becomes past, its URL drops off discovery and the lot data is often
+# hidden behind login. To capture results, we save every discovered future-sale URL
+# in a local watchlist and re-fetch it after sale_date passes — that's the only
+# window where the sale page still serves lots WITH `result` values.
+
+def _ensure_watchlist_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS drouot_watchlist (
+            url TEXT PRIMARY KEY,
+            sale_date TEXT,
+            auction_title TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+            last_checked TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            note TEXT
+        )
+    """)
+    conn.commit()
+
+
+def _watchlist_add(conn, url, sale_date=None, title=None):
+    """Idempotent insert. Updates sale_date/title if they were unknown before."""
+    conn.execute("""
+        INSERT INTO drouot_watchlist (url, sale_date, auction_title)
+        VALUES (?, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+            sale_date = COALESCE(drouot_watchlist.sale_date, excluded.sale_date),
+            auction_title = COALESCE(drouot_watchlist.auction_title, excluded.auction_title)
+    """, (url, sale_date, title))
+
+
+def _watchlist_due_for_refetch(conn):
+    """Return URLs whose sale_date is past + still pending + not too many attempts.
+    Spaces out retries: ≤3 attempts in first 7 days, then weekly after."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = conn.execute("""
+        SELECT url FROM drouot_watchlist
+        WHERE status = 'pending'
+          AND sale_date IS NOT NULL
+          AND sale_date < ?
+          AND (
+              attempts < 3
+              OR last_checked IS NULL
+              OR last_checked < datetime('now','-7 days')
+          )
+        ORDER BY sale_date DESC
+        LIMIT 100
+    """, (today,)).fetchall()
+    return [r[0] for r in rows]
+
+
+def _watchlist_mark(conn, url, status, note=None):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute("""
+        UPDATE drouot_watchlist
+        SET status = ?, last_checked = ?, attempts = attempts + 1, note = ?
+        WHERE url = ?
+    """, (status, now, note, url))
+
+
 # ---- main entry ------------------------------------------------------------
 
 def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pages=200):
@@ -561,16 +625,28 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
     """
     scraper = _make_scraper()
     vn_catalog, exclusions = _load_vn() if filter_vn else ({}, set())
+    _ensure_watchlist_table(conn)
 
     if sale_urls is None:
         if verbose:
             print("  [drouot] discovering Asian-art sales…", flush=True)
-        sale_urls = discover_asian_sales(scraper, max_pages=max_pages, verbose=verbose)
+        discovered = discover_asian_sales(scraper, max_pages=max_pages, verbose=verbose)
         if verbose:
-            print(f"  [drouot] found {len(sale_urls)} sale URLs", flush=True)
+            print(f"  [drouot] found {len(discovered)} discovered URLs", flush=True)
+
+        # Pull URLs whose sale_date has passed and we haven't captured results yet.
+        # These are sales we tracked earlier as 'future'; now they're past and
+        # Drouot still serves lots-with-results for a short window.
+        revisit = _watchlist_due_for_refetch(conn)
+        if verbose and revisit:
+            print(f"  [drouot] re-fetching {len(revisit)} past sales from watchlist", flush=True)
+
+        # Re-fetch FIRST (results most likely to disappear) then fresh discoveries.
+        sale_urls = revisit + [u for u in discovered if u not in revisit]
 
     total_inserted = 0
     total_scanned = 0
+    revisit_set = set(_watchlist_due_for_refetch(conn))  # rescan-pass URLs for status updates
 
     for i, sale_url in enumerate(sale_urls, 1):
         run_started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -630,7 +706,13 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
         if auctioneer_name:
             auction_title += f" ({auctioneer_name})"
 
+        # Watchlist: record this sale for future re-fetch (idempotent).
+        # If sale_date is past + we found result lots, mark resolved at the end.
+        today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _watchlist_add(conn, sale_url, sale_date=sale_date, title=sale_title_full[:200])
+
         inserted_this = 0
+        results_seen = 0  # lots with a non-zero hammer (used to decide watchlist status)
         sale_date_min = sale_date_max = None
         for lot in lots:
             # Drouot lots embed source-URL slug + numeric id
@@ -678,6 +760,7 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
             if result > 0:
                 status = "sold"
                 hammer = result
+                results_seen += 1
             else:
                 # No hammer price reported. Distinguish:
                 #   - Sale date is in the future → SKIP (it's a still-open
@@ -685,9 +768,8 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
                 #     misleads readers into thinking it sold).
                 #   - Sale date is past → keep as "passed" / unsold record
                 #     with no price (no fake midpoint).
-                today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 if sale_date and sale_date >= today_iso:
-                    continue  # still open — let upcoming_auctions handle it
+                    continue  # still open — watchlist will re-fetch after sale_date
                 status = "passed"
                 hammer = None
 
@@ -739,6 +821,19 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
                 if verbose:
                     print(f"    insert err {lot_id}: {e}", flush=True)
 
+        # Watchlist status: a sale is "resolved" once we've captured ≥1 lot with
+        # a hammer price (any artist, not just VN — the indicator we care about
+        # is whether Drouot is still serving results for this URL).
+        if sale_date and sale_date < today_iso:
+            if results_seen > 0:
+                _watchlist_mark(conn, sale_url, "resolved",
+                                note=f"{results_seen} lots with results")
+            else:
+                # Past sale but page returned no `result` values — either Drouot
+                # has hidden them or the auction was unsold. Mark for retry; if
+                # this is the 3rd+ attempt, leave it "pending" until 7-day cooldown.
+                _watchlist_mark(conn, sale_url, "pending",
+                                note=f"no results yet (lots={len(lots)})")
         conn.commit()
         log_crawl_run(
             conn, "drouot",
