@@ -39,6 +39,12 @@ VN_ARTISTS = [
     ("nguyen-lam-u8xqwzm847", "Nguyen Lam"),
     ("thanh-binh-nguyen-027bbf808c", "Nguyen Thanh Binh"),
     ("chuong-thanh-2oyzu9cp3o", "Thanh Chuong"),
+    # ─── Gang of Five / Đổi Mới Hà Nội ───
+    ("dung-hong-viet-dgjgs2zn6h", "Hong Viet Dung"),
+    ("phong-dao-hai-jy26j9j340", "Dao Hai Phong"),
+    ("hung-bui-huu-1g69oe3i2y", "Bui Huu Hung"),
+    ("hoa-dang-xuan-s0o1amemkp", "Dang Xuan Hoa"),
+    ("trung-nguyen-pk5fzyq7yb", "Nguyen Trung"),
 ]
 
 
