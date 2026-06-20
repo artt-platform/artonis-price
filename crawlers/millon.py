@@ -269,8 +269,8 @@ def fetch_artist_page(slug, scraper=None):
 
 def list_vn_past_catalogs(scraper=None, max_pages=25):
     """Return all Millon catalogs filed under the Vietnam department (1113).
-    This is the authoritative, Millon-curated list — do NOT fall back to keyword matching
-    on all past sales (which mixed in unrelated Orientalism/Asian-art catalogs)."""
+    Authoritative Millon-curated VN list. Use list_all_past_catalogs() for broader coverage
+    of special sales (e.g. "Centenaire EBAI") that aren't dept-tagged."""
     scraper = scraper or _make_scraper()
     all_cats = set()
     for page in range(max_pages):
@@ -289,6 +289,48 @@ def list_vn_past_catalogs(scraper=None, max_pages=25):
             all_cats.update(cats)
         except Exception:
             break
+    return sorted(all_cats)
+
+
+# Slug fragments that strongly suggest a sale contains Vietnamese / Indochina art.
+# Used by list_all_past_catalogs() to pre-filter the universe of past sales before
+# expensive per-lot resolution. The downstream VN_ARTIST_CATALOG filter still applies.
+_VN_RELEVANT_SLUG_KEYWORDS = (
+    "vietnam", "indochine", "indochina", "hanoi", "saigon", "asie", "asiatique",
+    "asian", "orientaliste", "tableaux-modernes", "tableaux-asiatiques",
+    "moderne-asiatique", "ecole-des-beaux-arts", "centenaire", "tonkin",
+)
+
+
+def list_all_past_catalogs(scraper=None, max_pages=80, year_min=2018, slug_filter=True):
+    """Broader discovery: enumerate ALL Millon past catalogs (no dept filter), keep only
+    slugs likely to contain VN art. Catches "Centenaire EBAI" / "Tableaux Modernes" /
+    Orientalist sales that the Vietnam-dept-only list misses.
+
+    - year_min: skip ventes obviously older than this (Millon vente IDs roughly correlate
+      with chronology; vente >= 3000 is post-2020-ish; tune as needed).
+    - slug_filter: if True, only keep slugs containing a VN-relevant keyword.
+    """
+    scraper = scraper or _make_scraper()
+    all_cats = set()
+    for page in range(max_pages):
+        url = "https://www.millon.com/catalogue/ventes-passees"
+        if page > 0:
+            url += f"?page={page}"
+        try:
+            r = scraper.get(url, timeout=20)
+            if r.status_code != 200:
+                break
+            cats = set(re.findall(r"/catalogue/(vente\d+-[a-z0-9\-]+)", r.text))
+            new = cats - all_cats
+            if not new:
+                break
+            all_cats.update(cats)
+        except Exception:
+            break
+    # Filter by slug keywords (cheap pre-filter; per-lot artist whitelist applies later)
+    if slug_filter:
+        all_cats = {c for c in all_cats if any(kw in c.lower() for kw in _VN_RELEVANT_SLUG_KEYWORDS)}
     return sorted(all_cats)
 
 
@@ -343,13 +385,25 @@ def parse_catalog_results(scraper, catalog_slug):
     return records
 
 
-def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, verbose=True, filter_vn=True, max_catalogs=None):
-    """Crawl Millon past auction catalogs (Vietnam-themed), extract all sold lots with hammer prices."""
+def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, verbose=True, filter_vn=True, max_catalogs=None, discovery='dept'):
+    """Crawl Millon past auction catalogs, extract all sold lots with hammer prices.
+
+    discovery:
+      'dept' — only catalogs filed under Vietnam dept 1113 (default, original behavior)
+      'broad' — also include catalogs whose slug contains VN-related keywords (Indochine,
+                Centenaire, Asie, etc.). filter_vn whitelist still applies per lot.
+    """
     scraper = _make_scraper()
     if catalog_slugs is None:
-        if verbose: print("  Discovering past catalogs...")
-        catalog_slugs = list_vn_past_catalogs(scraper)
-        if verbose: print(f"  Found {len(catalog_slugs)} VN-themed past catalogs")
+        if verbose: print(f"  Discovering past catalogs (mode={discovery})...")
+        dept_cats = list_vn_past_catalogs(scraper)
+        if discovery == 'broad':
+            broad_cats = list_all_past_catalogs(scraper)
+            catalog_slugs = sorted(set(dept_cats) | set(broad_cats))
+            if verbose: print(f"  Found {len(dept_cats)} dept-1113 + {len(broad_cats)} slug-keyword = {len(catalog_slugs)} total")
+        else:
+            catalog_slugs = dept_cats
+            if verbose: print(f"  Found {len(catalog_slugs)} VN-themed past catalogs")
     if max_catalogs:
         catalog_slugs = catalog_slugs[:max_catalogs]
 
@@ -453,6 +507,12 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
         total += inserted_this
         time.sleep(delay)
     return total
+
+
+def crawl_past_broad(conn, **kw):
+    """Entry point for crawl_and_sync: broader past-catalog discovery (dept=1113 +
+    slug-keyword scan). Catches special sales like 'Centenaire EBAI' that aren't dept-tagged."""
+    return crawl_past_catalogs(conn, discovery='broad', **kw)
 
 
 def crawl_all(conn, slugs=None, delay=2.5, verbose=True, fetch_details=True, detail_delay=2):

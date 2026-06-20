@@ -49,10 +49,54 @@ SEED_SALE_URLS = [
     "https://www.christies.com/en/auction/20th-21st-century-art-evening-sale-24142-hgk/",            # Mar 2025
     "https://www.christies.com/en/auction/a-quest-for-eternity-the-philippe-damas-collection-24143-hgk/",  # Mar 2025 — 51 VN works
     "https://www.christies.com/en/auction/20th-century-day-sale-30624/",                             # Sep 2025 HK
+    # ─── Mar 2025 HK ───
+    "https://www.christies.com/en/auction/20th-21st-century-art-evening-sale-23390/",  # Mar 2025 HK Eve
+    "https://www.christies.com/en/auction/20th-century-day-sale-23391/",               # Mar 2025 HK Day — Nguyễn Nam Sơn Portrait HKD 1.6M
     # ─── 2026 ─── ───
     "https://www.christies.com/en/auction/20th-century-day-sale-30850/",
     "https://www.christies.com/en/auction/20th-century-contemporary-art-evening-sale-30849/",
 ]
+
+
+def discover_recent_hk_sales(year_min=2024, max_attempts=200):
+    """Best-effort discovery: probe Christie's auction URL pattern for new HK Asian sales.
+    Christie's /en/auctions/ index is JS-rendered, so we can't crawl pagination cleanly.
+    Workaround: known sale IDs roughly increase chronologically; probe a range and keep
+    URLs that return 200 + match our slug patterns.
+
+    Returns list of newly-discovered sale URLs (not already in SEED_SALE_URLS).
+    Use sparingly — this is a fallback, not a primary discovery method.
+    """
+    known_ids = set()
+    for u in SEED_SALE_URLS:
+        m = re.search(r"-(\d+)(?:-hgk)?/?$", u)
+        if m:
+            known_ids.add(int(m.group(1)))
+    if not known_ids:
+        return []
+    start = max(known_ids) + 1
+    found = []
+    base = "https://www.christies.com/en/auction"
+    slug_patterns = [
+        "20th-21st-century-art-evening-sale",
+        "20th-century-day-sale",
+        "20th-21st-century-evening-sale",
+        "21st-century-day-sale",
+    ]
+    for sid in range(start, start + max_attempts):
+        for slug in slug_patterns:
+            for suffix in ("", "-hgk"):
+                url = f"{base}/{slug}-{sid}{suffix}/"
+                try:
+                    r = requests.head(url, headers=HEADERS, timeout=5, allow_redirects=True)
+                    if r.status_code == 200 and "/auction/" in (r.url or url):
+                        found.append(url)
+                        break
+                except Exception:
+                    pass
+            if found and found[-1].endswith(f"-{sid}-hgk/") or (found and f"-{sid}/" in found[-1]):
+                break
+    return found
 
 
 _SALE_INFO_CACHE = {}  # sale_number → (title, date, url)

@@ -100,6 +100,8 @@ SEED_SALE_URLS = [
     "https://www.sothebys.com/en/buy/auction/2025/modern-contemporary-evening-auction",  # 2 VN — 2025-03-29 HK
     # ─── Historical 2018-2022 expansion (auto-discovered 2026-06-15 from /results) ──
     "https://www.sothebys.com/en/buy/auction/2019/modern-and-contemporary-southeast-asian-art-online",
+    "https://www.sothebys.com/en/buy/auction/2019/modern-contemporary-southeast-asian-art-hk0859",  # Apr 2019
+    "https://www.sothebys.com/en/buy/auction/2020/modern-and-contemporary-southeast-asian-art-hk0932",  # Jul 2020 — Nguyễn Nam Sơn Nude 1939
     "https://www.sothebys.com/en/buy/auction/2020/modern-and-contemporary-southeast-asian-art-day-sale",
     "https://www.sothebys.com/en/buy/auction/2020/modern-art-day-sale",
     "https://www.sothebys.com/en/buy/auction/2021/modern-art-day-sale",

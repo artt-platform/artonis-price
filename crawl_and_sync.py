@@ -63,6 +63,7 @@ ALL_CRAWLERS = [
     # Heritage Auctions — DataDome anti-bot blocked, requires manual cookies (excluded):
     # ('heritage',       'crawlers.heritage',       'heritage',       'crawl'),
     ('millon',         'crawlers.millon',         'millon',         'crawl_all'),
+    ('millon_past',    'crawlers.millon',         'millon',         'crawl_past_broad'),
     ('millon_vn',      'crawlers.millon_vn',      'millon',         'crawl'),
     ('gros_delettrez', 'crawlers.gros_delettrez', 'gros-delettrez', 'crawl'),
     ('invaluable',     'crawlers.invaluable',     'invaluable',     'crawl_all'),
