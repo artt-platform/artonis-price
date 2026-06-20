@@ -8,17 +8,37 @@ from crawlers.common import parse_amount, parse_date, insert_sale_result, clean_
 
 BASE = "https://www.invaluable.com"
 
-# Known Vietnamese artist slug-IDs on Invaluable (discovered manually)
+# Vietnamese artist slug-IDs on Invaluable.
+# Original 9 discovered manually; 13 added via sitemap_artist_sold_{1..5}.xml scan
+# (2026-06-20). Slug order varies (firstname-lastname OR lastname-firstname) — depends
+# on how the artist was first indexed.
 VN_ARTISTS = [
+    # ─── Đông Dương / Bộ Tứ Trời Âu (highest auction volume) ───
     ("pho-le-e2gj8yti0x", "Le Pho"),
     ("vu-cao-dam-a66cifzwj8", "Vu Cao Dam"),
     ("thu-mai-trung-5uyddinxpg", "Mai Trung Thu"),
     ("thi-luu-le-f0nhkt6ylm", "Le Thi Luu"),
     ("phan-chanh-nguyen-31jb0v4ys3", "Nguyen Phan Chanh"),
+    ("van-to-ngoc-kv3lei58fg", "To Ngoc Van"),
+    ("can-tran-van-8cjqm4q98d", "Tran Van Can"),
+    ("nguyen-gia-tri-osazdyf3y6", "Nguyen Gia Tri"),
+    ("pham-hau-rked7esf7v", "Pham Hau"),
+    # ─── Bộ Tứ Hà Nội ───
+    ("bui-xuan-phai-pwauujf4v2", "Bui Xuan Phai"),
+    ("nguyen-sang-7whaovmann", "Nguyen Sang"),
+    ("nguyen-tu-nghiem-a30sjp2rme", "Nguyen Tu Nghiem"),
+    # ─── French Indochina school adjacent ───
     ("alix-dailhac-ayme-n72w6nwo56", "Alix Aymé"),
     ("joseph-inguimberty-2ud5mwyar1", "Joseph Inguimberty"),
+    # ─── Đổi Mới / Contemporary ───
+    ("lebadang-gablwd0251", "Lebadang"),
+    ("hau-tran-luu-0wx9ctzcby", "Tran Luu Hau"),
+    ("hai-pham-an-z9tlw6za25", "Pham An Hai"),
+    ("dinh-quan-fjz76pnnfi", "Dinh Quan"),
+    ("le-thanh-son-n5mvwrhodf", "Le Thanh Son"),
     ("nguyen-lam-u8xqwzm847", "Nguyen Lam"),
     ("thanh-binh-nguyen-027bbf808c", "Nguyen Thanh Binh"),
+    ("chuong-thanh-2oyzu9cp3o", "Thanh Chuong"),
 ]
 
 
