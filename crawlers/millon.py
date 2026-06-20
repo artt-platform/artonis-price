@@ -438,14 +438,26 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
 
         inserted_this = 0
         for rec in records:
-            # Fetch lot detail for artist name + title + dimensions
-            details = _fetch_lot_details(scraper, rec["lot_url"])
-            # Skip attribution lots — works "after / d'après / attribué à / et son atelier"
-            # are NOT original by the named artist. Detected in URL lot slug
-            # (e.g. .../lot12-le-quoc-loc-1918-1987-attribue) or in the meta desc.
             url_low = (rec["lot_url"] or "").lower()
+            # Skip attribution lots up front (no need to fetch detail)
             if re.search(r"-(?:attribue|attribue-a|et-son-atelier|et-atelier|d-apres|atelier-de|ecole-de|entourage-de|cercle-de|cours-de|after)(?:-|$)", url_low):
                 continue
+            # Pre-filter: check URL slug-artist against VN whitelist BEFORE fetching detail.
+            # The slug encodes the artist name (e.g. lot6-nguyen-nam-son-1890-1973 → "nguyen nam son"),
+            # so we can reject non-VN artists without spending a network round-trip per lot.
+            # Saves ~95% of detail fetches when scanning Tableaux-Modernes-style catalogs.
+            if filter_vn and rec.get("slug_artist"):
+                slug_norm = normalize_key(rec["slug_artist"].replace("-", " "))
+                # Strip trailing years from slug-derived name
+                slug_norm = re.sub(r"\s+(?:1[89]\d{2}|20[0-2]\d)(?:\s+.*)?$", "", slug_norm).strip()
+                if slug_norm in exclusions:
+                    continue
+                slug_is_vn = (slug_norm in vn_catalog or
+                              any(slug_norm == k or slug_norm.startswith(k + " ") or k.startswith(slug_norm + " ") for k in vn_catalog))
+                if not slug_is_vn:
+                    continue
+            # Fetch lot detail for artist name + title + dimensions
+            details = _fetch_lot_details(scraper, rec["lot_url"])
             meta = details.get("meta_desc", "")
             if re.search(r"\b(?:Attribu[eé](?:\s+[àa])?|D['’]?Apr[èe]s|Et\s+Son\s+Atelier|Attributed\s+To|After\s+|Circle\s+of|Follower\s+of|Studio\s+of|Workshop\s+of|Manner\s+of)\b",
                          meta, re.IGNORECASE):
