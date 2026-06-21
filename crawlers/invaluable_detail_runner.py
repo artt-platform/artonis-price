@@ -107,43 +107,65 @@ def slug_artist_tokens(url):
     return set(tokens) if len(tokens) >= 2 else None
 
 
-def validate_artist(parsed_h1_name, source_url, mapped_tokens):
-    """Decide whether to keep stored artist_id or unmap.
+_VN_NAME_ALLOWLIST = {
+    # Family names
+    'nguyen','tran','le','pham','hoang','vu','dang','bui','do','ho',
+    'phan','vuong','ly','dao','mai','vo','truong','lam','cao','ton',
+    'dinh','diep','trinh','luong','chau','quach','hong','luu','tang',
+    # Common middle/given names (Vietnamese)
+    'van','thi','hong','quoc','anh','khanh','minh','bao','cong','phuc',
+    'tin','tuyen','trung','tu','truc','khang','tan','phong','bich','linh',
+    'lan','lien','lieu','ngoc','nam','nga','nhan','nhi','oanh','phuong',
+    'quan','quynh','sang','son','tam','thang','thanh','thao','the','thien',
+    'thinh','thuy','toan','trang','tri','tuan','tue','tung','tuong','ut',
+    'vy','xinh','xuan','yen','duy','phu','khoa','khoi','hieu','hiep','hung',
+    'huy','huong','sinh','tai','tho','thu','kha','quy','viet','dung','an',
+    'cuc','hoa','hau','huyen','ich','khue','luc','my','ngan','nhung','suong',
+    'tinh','tran','trinh','vinh','vo','xa','xinh','dinh','han','lieu',
+}
 
-    Conservative rule: only flag MISMATCH when slug_tokens (highly reliable)
-    contains at least one extra/different token vs mapped, AND that token
-    isn't a common modifier. URL slug is canonical — Invaluable always
-    prefixes the slug with the full artist name.
 
-    H1 parsing is fallible (descriptions like 'Abstract by Nguyen Gia Tri'
-    can confuse the regex), so we never unmap based on H1 alone.
+def validate_artist(parsed_h1_name, source_url, mapped_tokens, artist_vocab):
+    """Conservative validation: only unmap when slug ⊃ mapped with exactly one
+    extra token that LOOKS LIKE A NAME — alphabetic + (2-4 chars OR present
+    in our artist vocabulary). Rejects descriptor extras like 'royal' (5 chars,
+    not in vocab), 'laquer' (6 chars), '20th' (not alphabetic).
     """
     if not mapped_tokens:
         return True, None
     slug_tokens = slug_artist_tokens(source_url)
     if not slug_tokens:
-        return True, None  # can't validate → trust stored mapping
-    # Exact match — definitely the same artist
+        return True, None
     if slug_tokens == mapped_tokens:
         return True, None
-    # Stored is a subset of slug → slug has extra real name tokens →
-    # different artist (e.g. slug 'nguyen trung phan' ⊃ stored 'nguyen trung')
     if mapped_tokens < slug_tokens:
-        return False, slug_tokens
-    # Slug is a subset of stored — slug is incomplete (some artists have
-    # short slugs); trust stored.
-    if slug_tokens < mapped_tokens:
+        extras = slug_tokens - mapped_tokens
+        if len(extras) != 1:
+            return True, None
+        extra = next(iter(extras))
+        if not extra.isalpha():
+            return True, None
+        # Reject Roman numeral list markers and obvious non-name extras
+        ROMAN = {'i','ii','iii','iv','v','vi','vii','viii','ix','x'}
+        if extra in ROMAN:
+            return True, None
+        # Extra is a real name extension only if in vocab or VN allowlist
+        if extra in artist_vocab or extra in _VN_NAME_ALLOWLIST:
+            return False, slug_tokens
         return True, None
-    # Token sets disagree on at least one name token → mismatch
-    return False, slug_tokens
+    return True, None
 
 
-def build_payload(data, artist_lookup, current_artist_id):
+def build_payload(data, artist_lookup, artist_vocab, current_artist_id):
     """Build PATCH payload from parser output."""
     p = {}
     if data.get('artwork_title') and len(data['artwork_title']) > 1:
         p['artwork_title'] = data['artwork_title'][:300]
-    if data.get('year'):
+        # Overwrite year too — old scrapes often captured artist birth year by
+        # mistake; if parser found a title but no year, the year field should
+        # be cleared rather than retain stale birth-year data.
+        p['year'] = data.get('year')
+    elif data.get('year'):
         p['year'] = data['year']
     if data.get('medium'):
         p['medium'] = data['medium'][:200]
@@ -175,14 +197,18 @@ def build_payload(data, artist_lookup, current_artist_id):
             mid = (data['estimate_low'] + data['estimate_high']) / 2
             p['price_usd'] = round(mid * fx, 2)
             p['hammer_price'] = None  # we don't actually know
+        # $/m² derived from price_usd + area_m2 when both available
+        if data.get('area_m2') and p.get('price_usd'):
+            p['price_per_m2_usd'] = round(p['price_usd'] / data['area_m2'], 2)
 
-    # === Artist validation (the v5 fix) ===
+    # === Artist validation (slug-based, conservative) ===
     if current_artist_id:
         mapped = artist_lookup.get(current_artist_id, set())
         ok, suggested = validate_artist(
             data.get("artist_from_h1") or data.get("artist") or "",
             data.get("url", ""),
             mapped,
+            artist_vocab,
         )
         if not ok:
             new_id = None
@@ -205,7 +231,13 @@ def main():
     args = ap.parse_args()
 
     artist_lookup = load_artist_lookup()
-    print(f'Loaded {len(artist_lookup)} artists for validation', flush=True)
+    # Vocabulary of all known name tokens — used to verify slug extras
+    # look like plausible name extensions (e.g. 'phan', 'tin'), not
+    # descriptors ('royal', 'laquer', '20th').
+    artist_vocab = set()
+    for toks in artist_lookup.values():
+        artist_vocab.update(toks)
+    print(f'Loaded {len(artist_lookup)} artists, {len(artist_vocab)} name tokens for validation', flush=True)
 
     if args.source_url:
         r = requests.get(
@@ -272,7 +304,7 @@ def main():
                     break
             done += 1
 
-            payload = build_payload(data, artist_lookup, lot.get('artist_id')) if data else {}
+            payload = build_payload(data, artist_lookup, artist_vocab, lot.get('artist_id')) if data else {}
             mismatch_info = payload.pop('_artist_mismatch', None)
             if mismatch_info:
                 parsed_name, new_id = mismatch_info

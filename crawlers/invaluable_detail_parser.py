@@ -94,7 +94,7 @@ def _h1_to_title_year(h1, artist_name):
 
 
 _FRAC_NUM = r'\d+(?:\s+\d+/\d+)?(?:[.,]\d+)?'
-_DIM_RE = re.compile(rf'({_FRAC_NUM})\s*[xX×]\s*({_FRAC_NUM})\s*(cm|inches?|in|")\b')
+_DIM_RE = re.compile(rf'({_FRAC_NUM})\s*(?:["″])?\s*[xX×]\s*({_FRAC_NUM})\s*(cm|inches?|in|"|″)(?:\s|$|[,.;])')
 
 
 def _parse_num(s):
@@ -199,6 +199,34 @@ def parse_lot_page(page, url):
     except Exception:
         pass
 
+    # If H1 had no title (just artist name) — fall back to Description section
+    # which typically lists title on its 3rd-ish line for many auction houses.
+    if not out.get('artwork_title'):
+        desc = _section_value(body, 'Description', _SECTION_STOPS)
+        if desc:
+            lines = [l.strip() for l in desc.split('\n') if l.strip()]
+            # Drop artist info lines (all-caps name, 'Vietnamese, b. YYYY', 'Vietnam, YYYY-')
+            content_lines = []
+            for L in lines:
+                if L == L.upper() and len(L.split()) <= 4 and L.replace(' ','').isalpha():
+                    continue  # all-caps artist line
+                if re.match(r'^Vietnamese?,?\s+b\.?\s*\d{4}', L, re.IGNORECASE):
+                    continue
+                if re.match(r'^Vietnam,?\s*\d{4}\-?\s*$', L, re.IGNORECASE):
+                    continue
+                if re.match(r'^\(?b\.?\s*\d{4}\)?\s*$', L):
+                    continue
+                content_lines.append(L)
+            if content_lines:
+                cand = content_lines[0].rstrip('.,;: ').strip()
+                # Strip trailing ", YYYY" → year
+                m_yr = re.search(r',\s*(\d{4})\s*$', cand)
+                if m_yr:
+                    out['year'] = m_yr.group(1)
+                    cand = cand[:m_yr.start()].strip()
+                if 2 <= len(cand) <= 200:
+                    out['artwork_title'] = cand
+
     # Date label overrides h1 year only if h1 didn't find one
     date_val = _section_value(body, 'Date', _SECTION_STOPS)
     if date_val and 'year' not in out:
@@ -221,7 +249,19 @@ def parse_lot_page(page, url):
         out['width_cm'] = w
         out['height_cm'] = h
         out['area_m2'] = round(w * h / 10000, 4)
-        out['dimensions'] = raw
+        # Normalize display: always cm, 1-decimal precision (drop .0 if integer)
+        def _fmt(n):
+            return f'{int(n)}' if n == int(n) else f'{n:.1f}'
+        out['dimensions'] = f'{_fmt(w)} x {_fmt(h)} cm'
+
+    # If Medium label was missing, take it from the prefix of Dimensions
+    # section (e.g. 'Gouache on paper 21" x 29" sight' → 'Gouache on paper').
+    if 'medium' not in out and dims_text:
+        m_med = re.match(r'^(.+?)\s+\d+(?:\s+\d+/\d+)?(?:[.,]\d+)?\s*(?:["″])?\s*[xX×]', dims_text)
+        if m_med:
+            cand = m_med.group(1).strip().rstrip('.,;:')
+            if 3 <= len(cand) <= 100:
+                out['medium'] = cand
 
     # Provenance
     prov = _section_value(body, 'Provenance', _SECTION_STOPS)
