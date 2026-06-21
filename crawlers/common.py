@@ -366,6 +366,10 @@ def classify_kind(medium, title):
             return "medal"
     # 2) Explicit sculpture/3D markers — including 3D lacquer-objects (boxes, dishes)
     for kw in _EXPLICIT_SCULPTURE_KWS:
+        # "tượng" is a sculpture marker, but "trừu tượng" = abstract (painting).
+        # Skip the substring match when it's part of the compound word.
+        if kw == "tượng" and ("trừu tượng" in blob or "tru tuong" in blob):
+            continue
         if kw in blob:
             return "sculpture"
     for kw in _LACQUER_OBJECT_KWS:
@@ -394,9 +398,11 @@ def classify_kind(medium, title):
     for kw in _SCULPTURE_MATERIAL_KWS:
         if kw in t:
             return "sculpture"
-    for kw in _TITLE_SCULPTURE_KWS:
-        if kw in t:
-            return "sculpture"
+    # "tượng" in title = sculpture, EXCEPT "trừu tượng" = abstract (painting).
+    if "trừu tượng" not in t and "tru tuong" not in t:
+        for kw in _TITLE_SCULPTURE_KWS:
+            if kw in t:
+                return "sculpture"
     return "painting"
 
 
