@@ -76,16 +76,66 @@ def load_artist_lookup():
     return {a['id']: normalize_name(a.get('display_name') or a['name']) for a in artists}
 
 
-def validate_artist(parsed_name, mapped_tokens):
-    """Return True iff parsed page name plausibly matches our stored artist.
-    Rule: parsed tokens ⊆ mapped tokens OR mapped tokens ⊆ parsed tokens.
-    Wrong because 'Nguyen Trung Phan' (3 tokens) is not subset/superset of
-    'Nguyen Trung' (2 tokens)? NO — {nguyen,trung} ⊂ {nguyen,trung,phan},
-    so subset check would WRONGLY accept. Require EXACT match instead."""
-    parsed = normalize_name(parsed_name)
-    if not parsed or not mapped_tokens:
-        return False
-    return parsed == mapped_tokens
+_SLUG_STOP = {
+    'vietnamese','vietnam','b','born','ne','en','xxe','siecle','xx','xxie',
+    'signed','attributed','attr','attribue','to','of','a','an','the','painting',
+    'school','ecole','village','self','abstract','untitled','still','life',
+    'portrait','nu','nude','flowers','landscape','mother','child','lady',
+    'ladies','lacquer','oil','ink','watercolour','watercolor','pastel','mixed',
+    'media','panel','canvas','silk','paper','wood','gouache','acrylic',
+    'attribuee','attribues','d','dapres','apres','french','american',
+    'after','circle','manner','follower','workshop',
+}
+
+
+def slug_artist_tokens(url):
+    """Extract artist-name tokens from /auction-lot/{slug} prefix.
+    Stops at first STOP token, digit, or single-char token."""
+    if not url:
+        return None
+    m = re.search(r'/auction-lot/([a-z0-9\-]+)', url)
+    if not m:
+        return None
+    slug = m.group(1)
+    slug = re.sub(r'-c-[a-z0-9]{8,12}$', '', slug)  # trailing hash
+    slug = re.sub(r'-\d{1,4}$', '', slug)         # trailing lot number
+    tokens = []
+    for t in slug.split('-'):
+        if not t or t in _SLUG_STOP or t.isdigit() or len(t) < 2:
+            break
+        tokens.append(t)
+    return set(tokens) if len(tokens) >= 2 else None
+
+
+def validate_artist(parsed_h1_name, source_url, mapped_tokens):
+    """Decide whether to keep stored artist_id or unmap.
+
+    Conservative rule: only flag MISMATCH when slug_tokens (highly reliable)
+    contains at least one extra/different token vs mapped, AND that token
+    isn't a common modifier. URL slug is canonical — Invaluable always
+    prefixes the slug with the full artist name.
+
+    H1 parsing is fallible (descriptions like 'Abstract by Nguyen Gia Tri'
+    can confuse the regex), so we never unmap based on H1 alone.
+    """
+    if not mapped_tokens:
+        return True, None
+    slug_tokens = slug_artist_tokens(source_url)
+    if not slug_tokens:
+        return True, None  # can't validate → trust stored mapping
+    # Exact match — definitely the same artist
+    if slug_tokens == mapped_tokens:
+        return True, None
+    # Stored is a subset of slug → slug has extra real name tokens →
+    # different artist (e.g. slug 'nguyen trung phan' ⊃ stored 'nguyen trung')
+    if mapped_tokens < slug_tokens:
+        return False, slug_tokens
+    # Slug is a subset of stored — slug is incomplete (some artists have
+    # short slugs); trust stored.
+    if slug_tokens < mapped_tokens:
+        return True, None
+    # Token sets disagree on at least one name token → mismatch
+    return False, slug_tokens
 
 
 def build_payload(data, artist_lookup, current_artist_id):
@@ -127,21 +177,21 @@ def build_payload(data, artist_lookup, current_artist_id):
             p['hammer_price'] = None  # we don't actually know
 
     # === Artist validation (the v5 fix) ===
-    # Prefer H1-derived name — Invaluable's 'Artist or Maker' is lossy on 
-    # multi-word artists (Nguyen Trung Phan reduced to Nguyen Trung).
-    parsed_artist = data.get('artist_from_h1') or data.get('artist')
-    if parsed_artist and current_artist_id:
+    if current_artist_id:
         mapped = artist_lookup.get(current_artist_id, set())
-        if not validate_artist(parsed_artist, mapped):
-            # Mismatch — try to find a different artist that DOES match
+        ok, suggested = validate_artist(
+            data.get("artist_from_h1") or data.get("artist") or "",
+            data.get("url", ""),
+            mapped,
+        )
+        if not ok:
             new_id = None
-            parsed_tokens = normalize_name(parsed_artist)
             for aid, tokens in artist_lookup.items():
-                if tokens and tokens == parsed_tokens:
+                if tokens and tokens == suggested:
                     new_id = aid
                     break
-            p['artist_id'] = new_id  # None to unmap
-            p['_artist_mismatch'] = (parsed_artist, new_id)
+            p["artist_id"] = new_id
+            p["_artist_mismatch"] = (" ".join(sorted(suggested)), new_id)
     return p
 
 
