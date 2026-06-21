@@ -41,7 +41,7 @@ def _h1_to_title_year(h1, artist_name):
         for variant in ordered:
             pat = re.escape(variant)
             new_text = re.sub(
-                rf'^{pat}\s*(?:\([^)]*\))?\s*(?:b\.\s*\d{{4}}[\-,\s]*)?[,;:\-–.]?\s*',
+                rf'^{pat}\s*(?:\([^)]*\))?\s*(?:b\.\s*\d{{4}}[\-,\s]*)?[,;:\-–.|]?\s*',
                 '',
                 text,
                 count=1,
@@ -51,7 +51,7 @@ def _h1_to_title_year(h1, artist_name):
                 text = new_text
                 break
     # 3. Strip leading "(Country, year-)" pattern
-    text = re.sub(r'^\([^)]*\)\s*[,;:\-–.]?\s*', '', text)
+    text = re.sub(r'^\([^)]*\)\s*[,;:\-–.|]?\s*', '', text)
     # 4. Pull trailing year ", YYYY" into separate field
     year = None
     m = re.search(r',\s*(\d{4})\b\s*[.,;]?\s*$', text)
