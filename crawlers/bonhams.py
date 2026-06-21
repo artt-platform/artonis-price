@@ -20,6 +20,7 @@ HEADERS = {
 FAKE_MARKERS = [
     "d'après", "d'apres", "après", "apres",      # after = copy
     "attribué à", "attribue a", "attributed to",  # attributed to = not confirmed
+    "attr to", "attr.", " attr ",                  # abbreviated 'attributed to'
     "école de", "ecole de", "school of",           # "school of" = not by the artist
     "style de", "style of", "in the style of",     # stylistic imitation
     "entourage de", "entourage of",                # circle of
@@ -154,6 +155,15 @@ def parse_lot(doc):
     # Try cm patterns first (A/B/C/D), then inch fallback (E).
     dimensions = ""
     for src in (catalog_desc_plain, title_full):
+        # 3D sculptures/reliefs: "70 by 130 by 2.5 cm" — first pair is face, third is depth.
+        # Must run BEFORE the 2D pattern so we don't grab `130 by 2.5` as the canvas.
+        m_3d = re.search(
+            r"(\d+(?:[.,]\d+)?)\s*(?:[x×]|by)\s*(\d+(?:[.,]\d+)?)\s*(?:[x×]|by)\s*\d+(?:[.,]\d+)?\s*cm",
+            src, re.IGNORECASE,
+        )
+        if m_3d:
+            dimensions = f"{m_3d.group(1).replace(',','.')} x {m_3d.group(2).replace(',','.')} cm"
+            break
         # A/B/C: cm explicit on at least the second number, optional cm/parens between
         m_cm = re.search(
             r"(\d+(?:[.,]\d+)?)\s*(?:cm)?\s*(?:\([^)]*(?:in|inch|inches)[^)]*\))?\s*"
