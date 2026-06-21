@@ -174,7 +174,24 @@ def parse_lot_page(page, url):
         h1 = h1s[0] if h1s else ''
         if h1 and h1.strip().lower() != 'www.invaluable.com':
             out['h1_raw'] = h1
-            title, year = _h1_to_title_year(h1, artist or '')
+            # Artist name from H1 = canonical (Invaluable's 'Artist or Maker'
+            # label sometimes aggregates 'Nguyen Trung Phan' under 'Nguyen Trung'
+            # because they share the prefix; H1 has the full attribution).
+            h1_clean = h1.replace('\xa0', ' ').strip()
+            h1_after_lot = re.sub(r'^Lot\s+\d+\s*[:,\-–]\s*', '', h1_clean)
+            m_artist = re.match(
+                r'^([A-Z][A-Za-z\s.\-]+?)(?=\s*[\(\.,]|\s+\d{4}|\s*$)',
+                h1_after_lot,
+            )
+            if m_artist:
+                name = m_artist.group(1).strip().rstrip('.,;:')
+                # Title-case ALL-CAPS variants
+                if name == name.upper() and ' ' in name:
+                    name = ' '.join(w.capitalize() for w in name.lower().split())
+                if 2 <= len(name) <= 80:
+                    out['artist_from_h1'] = name
+            # Prefer H1-derived (multi-word) artist for title stripping
+            title, year = _h1_to_title_year(h1, out.get('artist_from_h1') or artist or '')
             if title:
                 out['artwork_title'] = title
             if year:
@@ -210,6 +227,44 @@ def parse_lot_page(page, url):
     prov = _section_value(body, 'Provenance', _SECTION_STOPS)
     if prov and len(prov) < 1000:
         out['provenance'] = prov
+
+    # Estimate (Est: $X CUR - $Y CUR)
+    try:
+        body_text = body  # already computed above
+        m_est = re.search(
+            r'Est:?\s*\$?\s*([\d,]+(?:[.,]\d+)?)\s*([A-Z]{3})?\s*[-–]\s*\$?\s*([\d,]+(?:[.,]\d+)?)\s*([A-Z]{3})?',
+            body_text,
+        )
+        if m_est:
+            cur = (m_est.group(4) or m_est.group(2) or 'USD').upper()
+            try:
+                low = float(m_est.group(1).replace(',', ''))
+                high = float(m_est.group(3).replace(',', ''))
+                out['estimate_low'] = int(low)
+                out['estimate_high'] = int(high)
+                out['estimate_currency'] = cur
+            except ValueError:
+                pass
+    except Exception:
+        pass
+
+    # Sold/realized hammer (when shown publicly)
+    try:
+        m_sold = re.search(
+            r'(?:Sold|Realized|Realised|Price Realised):?\s*\$?\s*([\d,]+(?:[.,]\d+)?)\s*([A-Z]{3})?',
+            body,
+        )
+        if m_sold and 'Log in to view' not in body[max(0, m_sold.start()-30):m_sold.start()+50]:
+            try:
+                amt = float(m_sold.group(1).replace(',', ''))
+                if amt > 0:
+                    out['hammer_price'] = amt
+                    if m_sold.group(2):
+                        out['hammer_currency'] = m_sold.group(2).upper()
+            except ValueError:
+                pass
+    except Exception:
+        pass
 
     # Auction house from <a href="/auction-house/">
     try:
