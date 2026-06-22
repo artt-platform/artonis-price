@@ -353,7 +353,11 @@ _DRAWING_KWS = (
 
 
 _EXPLICIT_SCULPTURE_KWS = ("sculpture", "sculpté", "carved", "statuette", "buste en bronze",
-                           "buste en plâtre", "tượng", "modelé en", "molded plaster")
+                           "buste en plâtre", "tượng", "modelé en", "molded plaster",
+                           # Base/pedestal markers — only 3D works have one.
+                           # 'socle' / 'sans le socle' from French catalogs
+                           # (Bonhams Lebadang lot 31782/4 'Personnage').
+                           "socle", "pedestal", "without the base", "with base")
 
 
 def classify_kind(medium, title):

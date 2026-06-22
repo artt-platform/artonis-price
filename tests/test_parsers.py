@@ -398,6 +398,51 @@ class TestMillonCatalogParsing(unittest.TestCase):
         self.assertIn('lot38-pham-hau-1903-1994-attribue', slugs)
 
 
+class TestSculptureClassification(unittest.TestCase):
+    """Sculpture detection beyond the obvious 'sculpture' / 'bronze' keywords.
+
+    The Lebadang lot 31782/4 ('Personnage') is mixed-media-on-wood with
+    a separate base/pedestal — '<i>H: 50.5 cm sans le socle</i>'.  The
+    medium string alone reads like a painting on wood, but the presence
+    of 'socle' / 'pedestal' / 'sans le socle' / 'without the base'
+    means it's a 3D object.  Add those markers to the explicit
+    sculpture keyword list so the kind comes out right.
+    """
+
+    def _classify(self, medium, title):
+        from crawlers.common import classify_kind
+        return classify_kind(medium, title)
+
+    def test_socle_marker_makes_sculpture(self):
+        # Lebadang lot 7933 — Bonhams description contains 'sans le socle'.
+        # If the medium string captured by the parser includes 'socle' or
+        # 'sans le socle', classify_kind must return 'sculpture'.
+        self.assertEqual(
+            self._classify('mixed media on wood sans le socle', 'Personnage'),
+            'sculpture',
+        )
+
+    def test_pedestal_marker_makes_sculpture(self):
+        self.assertEqual(
+            self._classify('bronze with pedestal', 'Figure'),
+            'sculpture',
+        )
+
+    def test_without_the_base_marker(self):
+        self.assertEqual(
+            self._classify('mixed media on wood, 50.5 cm without the base', 'Personnage'),
+            'sculpture',
+        )
+
+    def test_regular_oil_on_wood_stays_painting(self):
+        # 'on wood' alone (no socle/pedestal/base) is a normal painting
+        # support — must not get false-positive sculpture.
+        self.assertEqual(
+            self._classify('oil on wood', 'Landscape'),
+            'painting',
+        )
+
+
 class TestCleanArtworkTitle(unittest.TestCase):
     """Strip trailing year + medium tokens from raw catalog titles.
 
