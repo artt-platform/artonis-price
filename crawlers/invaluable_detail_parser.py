@@ -97,15 +97,32 @@ _FRAC_NUM = r'\d+(?:\s+\d+/\d+)?(?:[.,]\d+)?'
 _DIM_RE = re.compile(rf'({_FRAC_NUM})\s*(?:["″])?\s*[xX×]\s*({_FRAC_NUM})\s*(cm|inches?|in|"|″)(?:\s|$|[,.;])')
 
 
-def _title_from_invaluable_slug(url):
-    """Recover artwork_title from an Invaluable lot URL when H1/Description
-    parsing failed. Examples:
-      .../auction-lot/spring-garden-by-nguyen-gia-tri-1908-1993-77-x-57-64-c-572454d8c8
-        → 'Spring Garden'
-      .../auction-lot/the-pagoda-roof-by-nguyen-gia-tri-1908-1993-37-5--50-c-5e2461caa8
-        → 'The Pagoda Roof'
-      .../auction-lot/dang-xuan-hoa-103-c-cf44656a5c
-        → None (no title in slug, just artist + numeric)
+def _title_from_invaluable_slug(url, artist_tokens=None):
+    """Recover artwork_title from an Invaluable lot URL when H1 / Description
+    parsing failed.  Patterns we handle:
+
+      A) <title>-by-<artist>-<birth>-<death>-<…>      (Christie's-style)
+         e.g. spring-garden-by-nguyen-gia-tri-1908-1993-77-x-57-64-c-…
+              → 'Spring Garden'
+
+      B) <artist>-<birth>-<death>-<title>-<lot>       (Aguttes / Bonhams style)
+         e.g. nguyen-sang-1923-1988-portrait-de-femme-1954-20-c-…
+              → 'Portrait de Femme 1954'
+
+      C) <artist>-b-<birth>-<title>-<lot>             (Bonhams 'b. 1962' style)
+         e.g. hong-viet-dung-b-1962-lady-with-a-fan-55-c-…
+              → 'Lady with a Fan'
+
+      D) <artist>-<title>-o-c-<lot>                   (Litchfield style)
+         e.g. dao-hai-phong-boat-by-house-o-c-315-c-…
+              → 'Boat by House'                       (o-c = 'oil/canvas' suffix)
+
+      E) <artist>-<lot>                               (no title in slug)
+         e.g. dang-xuan-hoa-103-c-cf44656a5c          → None
+
+    `artist_tokens` (deaccented, lowercased) is optional — if supplied the
+    parser walks past the leading artist words for patterns B / C / D.
+    Without it we only handle pattern A.
     """
     if not url:
         return None
@@ -113,17 +130,56 @@ def _title_from_invaluable_slug(url):
     if not m:
         return None
     slug = m.group(1)
-    # Only trust slugs with explicit '-by-<artist>-<years>' marker — that pattern
-    # cleanly separates title from artist. Slugs without 'by-' may put artist+title
-    # in the same segment and we can't safely split them.
+    title_slug = None
+
+    # A) explicit 'by ARTIST years' separator
     m_by = re.match(r'(.+?)-by-[a-z\-]+\d{4}-\d{4}', slug)
-    if not m_by:
+    if m_by:
+        title_slug = m_by.group(1)
+    elif artist_tokens:
+        # B / C / D: artist comes first; walk past artist tokens and the
+        # year (or 'b. year') metadata that often follows, then take what's
+        # left minus the trailing lot number + suffix codes.
+        parts = slug.split('-')
+        i = 0
+        while i < len(parts):
+            p = parts[i]
+            if p in artist_tokens:
+                i += 1
+                continue
+            # 'b'/'born' followed by a 4-digit year
+            if p in ('b', 'born') and i + 1 < len(parts) and re.fullmatch(r'\d{4}', parts[i + 1]):
+                i += 2
+                continue
+            # 4-digit year(s) — birth, death, or sale year
+            if re.fullmatch(r'\d{4}', p):
+                i += 1
+                continue
+            break
+        # Strip trailing lot-number / suffix codes — but DON'T strip 4-digit
+        # years (1900-2099) because the year is often the last meaningful
+        # token of the title ('Portrait de Femme 1954').
+        j = len(parts)
+        while j > i:
+            tail = parts[j - 1]
+            if re.fullmatch(r'19\d{2}|20\d{2}', tail):
+                break
+            if re.fullmatch(r'\d+', tail) or tail in ('o', 'c', 'p'):
+                j -= 1
+                continue
+            break
+        if i < j:
+            tokens = parts[i:j]
+            # Drop any embedded dimension chunks like '27', 'x', '33-5'
+            if all(not re.match(r'\d', t) for t in tokens) or len(tokens) >= 2:
+                title_slug = '-'.join(tokens)
+
+    if not title_slug:
         return None
-    title_slug = m_by.group(1)
     parts = title_slug.split('-')
     if not parts or len(parts) > 10:
         return None
-    small = {'a','an','and','of','the','in','on','for','to','at','with'}
+    small = {'a', 'an', 'and', 'of', 'the', 'in', 'on', 'for', 'to', 'at', 'with', 'by', 'de', 'la', 'le', 'du', 'des', 'les', 'et', 'sur'}
     title = ' '.join(w.capitalize() if (i == 0 or w not in small) else w for i, w in enumerate(parts))
     return title if 2 <= len(title) <= 100 else None
 
