@@ -22,7 +22,14 @@ import requests
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
-from parser_v3 import parse_lot_page
+# Vultr deploys this file as crawler_v5.py + parser as parser_v3.py.
+# Locally the same files are invaluable_detail_runner.py + invaluable_detail_parser.py.
+# Try Vultr name first (matches deployed runtime), fall back to local repo
+# name so tests + local invocations work without copying files around.
+try:
+    from parser_v3 import parse_lot_page
+except ImportError:
+    from invaluable_detail_parser import parse_lot_page
 
 ENV = {}
 for line in Path('.env.local').read_text().splitlines():

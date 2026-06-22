@@ -94,7 +94,14 @@ def _h1_to_title_year(h1, artist_name):
 
 
 _FRAC_NUM = r'\d+(?:\s+\d+/\d+)?(?:[.,]\d+)?'
-_DIM_RE = re.compile(rf'({_FRAC_NUM})\s*(?:["″])?\s*[xX×]\s*({_FRAC_NUM})\s*(cm|inches?|in|"|″)(?:\s|$|[,.;])')
+# Allow the unit between the two numbers too — '100cm x 100cm' is a common
+# Vietnamese-catalogue formatting (NTR 'Message' lot regressed because the
+# regex only allowed an optional quote between number and 'x', not 'cm').
+_DIM_RE = re.compile(
+    rf'({_FRAC_NUM})\s*(?:cm|inches?|in|["″])?\s*'
+    rf'[xX×]\s*'
+    rf'({_FRAC_NUM})\s*(cm|inches?|in|"|″)(?:\s|$|[,.;])'
+)
 
 
 def _title_from_invaluable_slug(url, artist_tokens=None):

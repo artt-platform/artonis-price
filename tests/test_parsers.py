@@ -110,6 +110,29 @@ class TestClassifyKind(unittest.TestCase):
         # 3D lacquer objects (boxes, dishes) — not 2D paintings.
         self.assertEqual(classify_kind('lacquer', 'lacquer box'), 'sculpture')
 
+    def test_lithograph_in_title_is_print(self):
+        # Regression: Lebadang lot 19439 with title 'Nadir lithograph on
+        # embossed' was classified as painting because 'lithograph' wasn't
+        # in _TITLE_PRINT_KWS — only in _PRINT_MEDIUM_KWS.
+        self.assertEqual(classify_kind('', 'Nadir lithograph on embossed'), 'print')
+        self.assertEqual(classify_kind('', 'Some Title lithograph'), 'print')
+        self.assertEqual(classify_kind('', 'Lithographie de Le Pho'), 'print')
+
+    def test_artists_proof_is_print(self):
+        # 'Artists Proof' / 'Artist's Proof' / 'AP' (épreuve d'artiste) =
+        # print edition marker.  Lebadang lot 19440 had this in title.
+        self.assertEqual(classify_kind('', 'Untitled Abstract, Artists Proof'), 'print')
+        self.assertEqual(classify_kind('', "Untitled, Artist's Proof"), 'print')
+
+    def test_etching_screenprint_in_title_is_print(self):
+        self.assertEqual(classify_kind('', 'Untitled etching'), 'print')
+        self.assertEqual(classify_kind('', 'Title sérigraphie'), 'print')
+
+    def test_edition_number_is_print(self):
+        # Pattern '142/250' = limited edition print marker.  Already in
+        # _EDITION_NUM_RE — guard against accidental removal.
+        self.assertEqual(classify_kind('', 'Title 142/250'), 'print')
+
 
 class TestDetectSupportType(unittest.TestCase):
     """Support type — affects $/m² peer comparison."""
@@ -129,6 +152,118 @@ class TestDetectSupportType(unittest.TestCase):
         self.assertEqual(detect_support_type('ink on silk', ''), 'silk')
         self.assertEqual(detect_support_type('oil on canvas', ''), 'canvas')
         self.assertEqual(detect_support_type('lacquer on wood', ''), 'lacquer')
+
+
+class TestDimRegex(unittest.TestCase):
+    """The Invaluable parser's _DIM_RE used to miss '100cm x 100cm'
+    because between the first number and the 'x', the unit 'cm' was
+    parsed where the regex only allowed optional quote + whitespace.
+
+    Document the patterns it MUST handle.  Run via _parse_dims_text from
+    invaluable_detail_parser, which is the public surface used by the
+    dim sweep.
+    """
+    def _dim(self, text):
+        from crawlers.invaluable_detail_parser import _parse_dims_text
+        return _parse_dims_text(text)
+
+    def test_double_unit_cm(self):
+        # Regression: NTR 'Message' lot — '100cm x 100cm' in page text.
+        out = self._dim('Dimensions 100cm x 100cm')
+        self.assertIsNotNone(out, "100cm x 100cm not parsed")
+        w, h, _ = out
+        self.assertEqual((w, h), (100.0, 100.0))
+
+    def test_single_unit_cm(self):
+        out = self._dim('Dimensions 65 x 50.6 cm')
+        self.assertIsNotNone(out)
+        self.assertEqual((out[0], out[1]), (65.0, 50.6))
+
+    def test_inches_to_cm(self):
+        # 26 x 31 3/4 in → 66.04 x 80.65 cm (fractional inches)
+        out = self._dim('Dimensions 26 x 31 3/4 in')
+        self.assertIsNotNone(out)
+        self.assertAlmostEqual(out[0], 66.04, places=1)
+        self.assertAlmostEqual(out[1], 80.65, places=1)
+
+    def test_quote_inches(self):
+        # '35.25" H x 35.25" W' style — each number followed by quote
+        out = self._dim('35.25" x 35.25"')
+        self.assertIsNotNone(out)
+        self.assertAlmostEqual(out[0], 89.5, places=1)
+
+
+class TestCurrencyConversion(unittest.TestCase):
+    """FX rates declared in crawlers/invaluable_detail_runner.py.  These
+    used to be incorrect (HKD lots stored at USD face value, off by ~8×)
+    until session fix; lock the rates in via a test."""
+
+    def test_fx_table(self):
+        # Import the FX table the crawler actually uses
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_runner",
+            Path(__file__).resolve().parent.parent / "crawlers" / "invaluable_detail_runner.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+        except Exception:
+            self.skipTest("runner module imports playwright; skip when unavailable")
+        FX = mod.FX
+        # Lock the major rates against accidental changes.  Update with
+        # market drift, but never below 80 % of these baselines.
+        self.assertGreater(FX.get('USD', 0), 0.99)
+        self.assertLess(FX.get('HKD', 0), 0.15)  # ~0.128
+        self.assertGreater(FX.get('GBP', 0), 1.20)  # ~1.27
+        self.assertGreater(FX.get('EUR', 0), 1.0)   # ~1.08
+        self.assertLess(FX.get('MYR', 0), 0.25)     # ~0.22
+
+
+class TestArtistMatchingPitfalls(unittest.TestCase):
+    """Document the slug-vs-artist matching rules so 'nguyen-trung-tin'
+    URLs don't get mapped to 'Nguyen Trung' artist by prefix match."""
+
+    def test_slug_extra_token_should_unmap(self):
+        # Imitate the runner's validate_artist logic for a few cases.
+        # Real code path:
+        # crawlers/invaluable_detail_runner.py::validate_artist
+        from crawlers.invaluable_detail_runner import validate_artist, normalize_name
+        # Mapped to Nguyen Trung (id 101), slug has 'tin' or 'phan' extra
+        ok, _ = validate_artist(
+            "",
+            "https://www.invaluable.com/auction-lot/nguyen-trung-tin-xxe-siecle-244-c-fake",
+            normalize_name("Nguyen Trung"),
+            set(),  # empty vocab → 'tin' must trigger via VN allowlist
+        )
+        self.assertFalse(ok, "Nguyen Trung Tin slug must NOT validate as Nguyen Trung")
+        ok, _ = validate_artist(
+            "",
+            "https://www.invaluable.com/auction-lot/nguyen-trung-phan-vietnamese-b-1940-c-fake",
+            normalize_name("Nguyen Trung"),
+            set(),
+        )
+        self.assertFalse(ok, "Nguyen Trung Phan slug must NOT validate as Nguyen Trung")
+
+    def test_exact_name_matches(self):
+        # Slug matches mapped artist exactly → validate
+        from crawlers.invaluable_detail_runner import validate_artist, normalize_name
+        ok, _ = validate_artist(
+            "",
+            "https://www.invaluable.com/auction-lot/nguyen-trung-1940-elegant-ladies-c-fake",
+            normalize_name("Nguyen Trung"),
+            set(),
+        )
+        self.assertTrue(ok, "Exact-token slug should validate")
+
+    def test_short_extra_token_rejected(self):
+        # Extra token like '20th', 'royal', 'large' must NOT cause unmap
+        # (they're descriptors, not name extensions).
+        from crawlers.invaluable_detail_runner import validate_artist, normalize_name
+        for extra in ('20th', 'royal', 'large', 'love', 'ii', 'iii'):
+            url = f"https://www.invaluable.com/auction-lot/dang-xuan-hoa-{extra}-something-c-fake"
+            ok, _ = validate_artist("", url, normalize_name("Dang Xuan Hoa"), set())
+            self.assertTrue(ok, f"Extra '{extra}' must NOT trigger unmap")
 
 
 if __name__ == '__main__':

@@ -296,6 +296,15 @@ _TITLE_PRINT_KWS = (
     "impression sur soie", "impression sur papier",
     "tirage limité", "tirage de tête",
     "exemplaire numéroté",
+    # Print medium words that surface in titles, not just medium fields —
+    # Lebadang lots had 'Nadir lithograph on embossed' as title with no
+    # medium captured.  Adding these keeps classify_kind working when the
+    # crawler can't separate medium from title.
+    "lithograph", "lithographs", "lithographie", " litho ",
+    "etching", "engraving", "screenprint", "sérigraphie", "serigraphie",
+    # Artist's-proof / Editions Artiste marker (no edition number visible)
+    "artists proof", "artist's proof", "artists' proof",
+    "épreuve d'artiste", "epreuve d'artiste",
 )
 # Edition fraction "342/450" — only flag as print if denom ≥100 (avoids dates like 05/03)
 _EDITION_NUM_RE = re.compile(r'\b\d{1,3}\s*/\s*\d{3,4}\b')
