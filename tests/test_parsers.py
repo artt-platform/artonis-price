@@ -350,6 +350,54 @@ class TestArtistMatchingPitfalls(unittest.TestCase):
             self.assertTrue(ok, f"Extra '{extra}' must NOT trigger unmap")
 
 
+class TestMillonCatalogParsing(unittest.TestCase):
+    """Millon detail-page parsing.
+
+    Each test maps to a real Millon HTML pattern from production.  We
+    test the helpers directly without hitting the network so the suite
+    stays fast.
+    """
+
+    def test_extract_adjuge_price(self):
+        from crawlers.millon import _extract_adjuge_eur
+        # vente4201 lot 11 markup
+        html = '<p class="title">Adjugé à</p><p class="price">3 500 €</p>'
+        self.assertEqual(_extract_adjuge_eur(html), 3500.0)
+        # Narrow no-break space (U+202F)
+        html2 = '<p class="title">Adjugé à</p><p class="price">42 000\xa0€</p>'
+        self.assertEqual(_extract_adjuge_eur(html2), 42000.0)
+        # No Adjugé block → returns None
+        self.assertIsNone(_extract_adjuge_eur('<p>nothing here</p>'))
+
+    def test_extract_estimation_range(self):
+        from crawlers.millon import _extract_estimation_eur
+        html = (
+            '<p class="title">Estimation</p>'
+            '<p class="price">35 000\xa0€ - 50 000\xa0€</p>'
+        )
+        self.assertEqual(_extract_estimation_eur(html), (35000.0, 50000.0))
+        self.assertEqual(_extract_estimation_eur('<p>nothing</p>'), (None, None))
+
+    def test_lot_slugs_from_catalog_html(self):
+        # Regression for the audit bug: parse_catalog_results scrapes the
+        # /resultat page and only catches lots with 'Adjugé à' nearby.
+        # The new parser walks the normal catalog index, which lists every
+        # lot regardless of sale status.  The extraction must capture lot
+        # slugs even when no price marker is in the same fragment.
+        from crawlers.millon import _extract_lot_slugs
+        html = '''
+            <a href="/catalogue/vente4201-lame-du-vietnam-arts-anciens-et-modernes/lot11-thang-tran-phenh-1895-1973">Lot 11</a>
+            <a href="/catalogue/vente4201-lame-du-vietnam-arts-anciens-et-modernes/lot52-tran-dinh-tho-1919-2011">Lot 52</a>
+            <a href="/catalogue/vente4201-lame-du-vietnam-arts-anciens-et-modernes/lot38-pham-hau-1903-1994-attribue">Lot 38</a>
+        '''
+        slugs = _extract_lot_slugs(html, 'vente4201-lame-du-vietnam-arts-anciens-et-modernes')
+        self.assertIn('lot11-thang-tran-phenh-1895-1973', slugs)
+        self.assertIn('lot52-tran-dinh-tho-1919-2011', slugs)
+        # Attribution lots are extracted here — the VN-filter / FAKE_MARKERS
+        # gate handles them later in the pipeline.
+        self.assertIn('lot38-pham-hau-1903-1994-attribue', slugs)
+
+
 class TestCleanArtworkTitle(unittest.TestCase):
     """Strip trailing year + medium tokens from raw catalog titles.
 

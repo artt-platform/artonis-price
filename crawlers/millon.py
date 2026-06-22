@@ -8,6 +8,68 @@ from bs4 import BeautifulSoup
 from crawlers.common import parse_amount, parse_date, insert_sale_result, clean_text, clean_artist_name, log_crawl_run
 
 
+# Catalog detail page extracts.  Millon uses
+#   <p class="title">Adjugé à</p><p class="price">3 500 €</p>
+# for hammer, and
+#   <p class="title">Estimation</p><p class="price">35 000 € - 50 000 €</p>
+# for the low/high range.  The number formatting uses regular spaces,
+# non-break (U+00A0) and narrow-no-break (U+202F) spaces as thousand
+# separators — we normalise all whitespace before parsing.
+
+_ADJUGE_RE = re.compile(
+    r'class="title">\s*Adjug[ée]\s*[àa]?\s*</p>\s*<p\s+class="price">\s*'
+    r'([0-9  \s\.,]+)\s*€',
+    re.IGNORECASE,
+)
+_ESTIMATION_RE = re.compile(
+    r'class="title">\s*Estimation\s*</p>\s*<p\s+class="price">\s*'
+    r'([0-9  \s\.,]+)\s*€\s*[-/]\s*'
+    r'([0-9  \s\.,]+)\s*€',
+    re.IGNORECASE,
+)
+
+
+def _to_eur_amount(s):
+    """Normalise a Millon-formatted euro number to a float.  Handles
+    French thousand separators (space, U+00A0, U+202F) and decimal
+    commas.  Returns None on empty / unparseable input."""
+    if not s:
+        return None
+    cleaned = re.sub(r'[\s  ]+', '', s).replace('.', '').replace(',', '.')
+    try:
+        return float(cleaned) if cleaned else None
+    except ValueError:
+        return None
+
+
+def _extract_adjuge_eur(html):
+    m = _ADJUGE_RE.search(html or '')
+    return _to_eur_amount(m.group(1)) if m else None
+
+
+def _extract_estimation_eur(html):
+    m = _ESTIMATION_RE.search(html or '')
+    if not m:
+        return (None, None)
+    return (_to_eur_amount(m.group(1)), _to_eur_amount(m.group(2)))
+
+
+def _extract_lot_slugs(html, catalog_slug):
+    """Pull every lot slug referenced from this catalog page.
+
+    Walks <a href="/catalogue/{catalog_slug}/lot{N}-...">.  Returns a set
+    of slug strings ('lot11-thang-tran-phenh-1895-1973').  Doesn't filter
+    by VN-relevance or attribution — the caller's whitelist + FAKE_MARKERS
+    pass handle that.  Intentionally permissive so we don't miss lots due
+    to overzealous pre-filtering.
+    """
+    pattern = re.compile(
+        rf'/catalogue/{re.escape(catalog_slug)}/(lot\d+[a-z0-9\-]*)',
+        re.IGNORECASE,
+    )
+    return set(pattern.findall(html or ''))
+
+
 def _fetch_lot_details(scraper, lot_url):
     """Fetch single lot detail page. Returns dict(title, medium, dimensions, year, birth, death).
 
@@ -63,6 +125,11 @@ def _fetch_lot_details(scraper, lot_url):
         if m_med:
             medium = clean_text(m_med.group(1))[:150]
 
+        # Hammer + estimate from the catalog detail markup.  Some lots
+        # only have an estimate (unsold or pre-sale).
+        hammer = _extract_adjuge_eur(r.text)
+        est_low, est_high = _extract_estimation_eur(r.text)
+
         return {
             "title_detail": title,
             "year": title_year,
@@ -71,6 +138,9 @@ def _fetch_lot_details(scraper, lot_url):
             "birth_year": birth_year,
             "death_year": death_year,
             "meta_desc": desc,
+            "hammer_eur": hammer,
+            "estimate_low_eur": est_low,
+            "estimate_high_eur": est_high,
         }
     except Exception:
         return {}
@@ -174,25 +244,16 @@ def _fetch_catalog_meta(scraper, slug):
     except Exception:
         return "", ""
 
-# Known Vietnamese / Indochine-school artists on Millon
-VN_ARTIST_SLUGS = [
-    "le-pho",
-    "vu-cao-dam",
-    "mai-trung-thu",
-    "le-thi-luu",
-    "nguyen-phan-chanh",
-    "nguyen-gia-tri",
-    "to-ngoc-van",
-    "alix-ayme",
-    "joseph-inguimberty",
-    "nam-son",
-    "pham-hau",
-    "le-quoc-loc",
-    "nguyen-tu-nghiem",
-    "bui-xuan-phai",
-    "duong-bich-lien",
-    "nguyen-sang",
-]
+# [Deprecated 2026-06] The hardcoded 16-name VN artist list used by the
+# old per-artist crawler (fetch_artist_page / crawl_all).  Audit on
+# vente3884 / vente4201 / vente3393 / vente2375 found 150 missing VN
+# lots across 17 Millon ventes because second-tier artists (Lê Huy Hòa,
+# Lưu Công Nhân, Trần Lưu Hậu, Nguyễn Trọng Kiệm, Lê Thy, Ngô Mạnh
+# Quỳnh, Trần Văn Thọ, …) were never in this list.  The catalog-driven
+# path (crawl_past_catalogs / crawl_past_broad) walks every lot in every
+# vente and filters via the full 246-entry VN_ARTIST_CATALOG, so it
+# discovers new artists automatically — no list to maintain.
+VN_ARTIST_SLUGS = []
 
 
 def _make_scraper():
@@ -335,53 +396,53 @@ def list_all_past_catalogs(scraper=None, max_pages=80, year_min=2018, slug_filte
 
 
 def parse_catalog_results(scraper, catalog_slug):
-    """Fetch /catalogue/{slug}/resultat page and extract lot records with hammer prices.
-    Returns list of dict records."""
-    url = f"https://www.millon.com/catalogue/{catalog_slug}/resultat"
+    """Walk every page of /catalogue/{slug} and collect every lot listed.
+
+    Previously read /catalogue/{slug}/resultat and matched 'Adjugé à' near
+    lot URLs.  That caught only confirmed-sold lots; estimate-only and
+    unsold lots were silently dropped (~50% under-coverage on some sales).
+    The audit on 2026-06 found 150 missing VN lots across 17 Millon
+    ventes — many were just unsold, not absent.
+
+    This version walks the regular catalog index pages and pulls every
+    `/lot\\d+-…` link.  Hammer + estimate come from the per-lot detail
+    fetch in crawl_past_catalogs, so unsold lots still get recorded
+    (status='estimate_only') rather than dropped.
+    """
+    base = f"https://www.millon.com/catalogue/{catalog_slug}"
+    seen_slugs = set()
     records = []
-    seen_lots = set()
-    for page in range(1, 10):  # paginate within catalog
-        page_url = url if page == 1 else f"{url}?page={page}"
+    for page in range(1, 12):  # tolerate paginated catalogs up to 12 pages
+        page_url = base if page == 1 else f"{base}?page={page - 1}"
         try:
             r = scraper.get(page_url, timeout=25)
             if r.status_code != 200:
                 break
         except Exception:
             break
-        text = r.text
-        # Each lot card: "Adjugé à ... X € ... LOT N ... /lot{N}-artist-YYYY-YYYY"
-        # Use finditer with non-greedy match
-        lot_pattern = re.compile(
-            r"Adjug[eé]\s+[àa]\s*[^\d]*([\d\s.,]+)\s*(?:€|EUR)"        # hammer price
-            r".*?/catalogue/" + re.escape(catalog_slug) + r"/(lot(\d+)-[^\"'\s>]+)",
-            re.IGNORECASE | re.DOTALL,
-        )
-        page_new = 0
-        for m in lot_pattern.finditer(text):
-            price_raw = m.group(1)
-            lot_path = m.group(2)
-            lot_num = m.group(3)
-            if lot_num in seen_lots:
+        new_slugs = _extract_lot_slugs(r.text, catalog_slug) - seen_slugs
+        if not new_slugs:
+            break
+        seen_slugs |= new_slugs
+        for lot_path in new_slugs:
+            m_num = re.match(r"lot(\d+)", lot_path)
+            if not m_num:
                 continue
-            seen_lots.add(lot_num)
-            amount, currency = parse_amount(price_raw, default_currency="EUR")
-            if amount is None:
-                continue
-            # Extract artist from slug (after lotN-)
-            m_art = re.match(r"lot\d+-([a-z0-9\-]+?)(?:-\d{4})?$", lot_path)
+            lot_num = m_num.group(1)
+            m_art = re.match(r"lot\d+-([a-z0-9\-]+?)(?:-\d{4}(?:-\d{4})?)?$", lot_path)
             slug_artist = m_art.group(1) if m_art else ""
-            # Title + years will come from lot detail page
+            # Strip trailing 'ne-en-YYYY' / 'b-YYYY' / 'attribue' markers
+            # so the VN-whitelist sees a clean artist token.
+            slug_artist = re.sub(r"-(?:ne-en|b)-?$|-attribue$|-attribut$|-suiveur$|-ecole-de$", "", slug_artist)
             records.append({
                 "slug": lot_path,
                 "lot_number": lot_num,
-                "hammer_price": amount,
-                "currency": currency,
+                "hammer_price": None,        # filled by detail-page fetch
+                "currency": "EUR",
                 "slug_artist": slug_artist,
-                "lot_url": f"https://www.millon.com/catalogue/{catalog_slug}/{lot_path}",
+                "lot_url": f"{base}/{lot_path}",
             })
-            page_new += 1
-        if page_new == 0:
-            break
+        time.sleep(0.6)
     return records
 
 
@@ -491,11 +552,17 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
 
             title = details.get("title_detail", "")
 
+            # Hammer price now comes from the detail page (Adjugé à marker)
+            # rather than the catalog /resultat regex.  Lots without a
+            # hammer (unsold / no result published) record as estimate_only.
+            hammer = details.get("hammer_eur") or rec.get("hammer_price")
+            status = "sold" if hammer else "estimate_only"
+
             cat_title, cat_date = _fetch_catalog_meta(scraper, slug)
             rec_out = {
                 "source": "millon",
                 "source_url": rec["lot_url"],
-                "sale_page_url": f"https://www.millon.com/catalogue/{slug}/resultat",
+                "sale_page_url": f"https://www.millon.com/catalogue/{slug}",
                 "lot_number": rec["lot_number"],
                 "auction_title": f"Millon — {cat_title or slug}",
                 "sale_date": cat_date,
@@ -505,12 +572,12 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
                 "medium": details.get("medium", ""),
                 "dimensions": details.get("dimensions", ""),
                 "year": details.get("year", ""),
-                "estimate_low": None,
-                "estimate_high": None,
-                "hammer_price": rec["hammer_price"],
+                "estimate_low": details.get("estimate_low_eur"),
+                "estimate_high": details.get("estimate_high_eur"),
+                "hammer_price": hammer,
                 "price_with_premium": None,
                 "currency": rec["currency"],
-                "status": "sold",
+                "status": status,
                 "raw_snapshot": (meta or rec["slug_artist"])[:500],
             }
             insert_sale_result(conn, rec_out)
@@ -537,32 +604,15 @@ def crawl_past_broad(conn, **kw):
 
 
 def crawl_all(conn, slugs=None, delay=2.5, verbose=True, fetch_details=True, detail_delay=2):
-    """Crawl price pages for all given artist slugs, insert into sale_results.
-    If fetch_details=True, also fetch each lot page to get dimensions + medium (slower but richer)."""
-    slugs = slugs or VN_ARTIST_SLUGS
-    scraper = _make_scraper()
-    total = 0
-    for slug in slugs:
-        records, err = fetch_artist_page(slug, scraper)
-        if err:
-            if verbose:
-                print(f"  [{slug}] skipped: {err}")
-            time.sleep(delay)
-            continue
-        if fetch_details:
-            for rec in records:
-                if rec.get("source_url"):
-                    details = _fetch_lot_details(scraper, rec["source_url"])
-                    if details.get("dimensions"):
-                        rec["dimensions"] = details["dimensions"]
-                    if details.get("medium"):
-                        rec["medium"] = details["medium"]
-                    time.sleep(detail_delay)
-        for r in records:
-            insert_sale_result(conn, r)
-        conn.commit()
-        if verbose:
-            print(f"  [{slug}] {len(records)} sales inserted")
-        total += len(records)
-        time.sleep(delay)
-    return total
+    """Backward-compat shim.  The artist-driven crawl (fetch_artist_page per
+    VN_ARTIST_SLUGS) is deprecated — see the comment on VN_ARTIST_SLUGS.
+
+    Forwards to crawl_past_catalogs(discovery='broad') so callers and the
+    crawl_and_sync orchestrator keep working without code changes.  The
+    'slugs' / 'fetch_details' / 'detail_delay' kwargs are accepted but
+    ignored (the catalog-driven path always fetches lot details and runs
+    per-lot regardless of which artists are listed).
+    """
+    if verbose:
+        print("  [millon] crawl_all is a compat shim; using catalog-driven crawl_past_broad")
+    return crawl_past_catalogs(conn, discovery='broad', delay=delay, verbose=verbose)

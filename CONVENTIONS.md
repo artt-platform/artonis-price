@@ -51,6 +51,29 @@ JSON → measurements_txt `(W x H cm.)` → bare text — see `crawlers/christie
 | Le Auction | `https://uk.bidspirit.com/ui/lotPage/leauction/source/catalog/auction/{portalKey}/lot/{item_id}/` — `portalKey` lives in `auction.auctionDays[<dayId>].portalKey` from Bidspirit's `loadAuctionDayCatalog` API.  Do NOT use `leauction.bidspirit.com/#catalog~aid~did~item~id` — that subdomain returns 404 on `/ui/lotPage/...`. |
 | Christie's | `https://www.christies.com/en/lot/lot-{lot_id}` — strip `?intObjectID=...&saleid=...` query strings. |
 | Bonhams / Sothebys / Aguttes etc | per their native URL pattern |
+| Millon | `https://www.millon.com/catalogue/{vente-slug}/{lot-slug}` where lot-slug is the **full** `lot{N}-{artist}-{years}` form (e.g. `lot36-thang-tran-phenh-1895-1972`).  The shortened `/lot{N}` form returns 404 — Millon resolves the lot URL using the artist suffix.  Store the full slug. |
+
+## Discovery: catalog-driven, not artist-driven
+
+The crawler must enumerate work via auction-house **catalogs**, then filter
+each lot against `data/vn_artist_catalog.py` (currently 246 names).  Do
+NOT hardcode a per-house artist whitelist.
+
+- Audit on 2026-06 found 150 missing VN lots across 17 Millon ventes — root
+  cause was a 16-name `VN_ARTIST_SLUGS` list in `crawlers/millon.py`.
+  Second-tier artists (Lê Huy Hòa, Lưu Công Nhân, Trần Lưu Hậu, Lê Thy,
+  Ngô Mạnh Quỳnh, Trần Văn Thọ, …) were never queried, so entire ventes
+  showed near-zero coverage.
+- The catalog-driven path (`crawl_past_catalogs` → `parse_catalog_results`
+  walks every `/catalogue/{vente}` index page, extracts every `/lot{N}-…`
+  href via `_extract_lot_slugs`) auto-picks up new artists when the
+  catalog adds entries to the VN catalog.
+- Each detail page is then probed for `Adjugé à` (hammer, `_extract_adjuge_eur`)
+  and `Estimation` (low/high, `_extract_estimation_eur`).  Lots without a
+  hammer record as `status='estimate_only'` rather than being dropped.
+- The artist-driven entry point (`crawlers/millon.py::crawl_all`) is now a
+  shim forwarding to `crawl_past_catalogs(discovery='broad')`.  Apply the
+  same pattern when adding a new auction-house crawler.
 
 ## Artist mapping
 
