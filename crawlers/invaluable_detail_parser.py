@@ -112,10 +112,23 @@ _HW_INCH_RE = re.compile(
     re.IGNORECASE,
 )
 
-# French Hauteur/Largeur labels: 'H. 60 cm - L. 100,5 cm' or 'H 60 x L 100.5'.
+# French Hauteur/Largeur labels.  Catalog variants we've hit:
+#   'H. 60 cm - L. 100,5 cm'         (Pham Hau lot 19270)
+#   'Dimensions à vue : H. 47 x L. 67,8 cm'  (Osenat lot 4557)
+#   'H 60 x L 100.5'
+# Separator between cm-and-L is any whitespace, dash, comma, or 'x'.
 _HL_CM_RE = re.compile(
-    rf'\bh(?:auteur)?\.?\s*({_FRAC_NUM})\s*cm[\s\-–,]+'
+    rf'\bh(?:auteur)?\.?\s*({_FRAC_NUM})\s*(?:cm)?[\s\-–,xX×]+'
     rf'l(?:argeur)?\.?\s*({_FRAC_NUM})\s*cm',
+    re.IGNORECASE,
+)
+
+# 'Nh high, Nw wide' / 'N high N wide' — Invaluable lacquer panel lots
+# (BHH 'Overall Size - 198cm high, 250cm wide').  Captures
+# (height_value, width_value, unit).
+_HEIGHT_WIDE_RE = re.compile(
+    rf'({_FRAC_NUM})\s*(cm|in|inches?|["″])\s*high[\s,]+'
+    rf'({_FRAC_NUM})\s*(?:cm|in|inches?|["″])?\s*wide',
     re.IGNORECASE,
 )
 
@@ -266,6 +279,22 @@ def _parse_dims_text(text):
             pass
         else:
             return round(w_cm, 2), round(h_cm, 2), m.group(0)
+
+    # 2b) 'Nh high, Nw wide' — Invaluable lacquer panels (BHH).  Unit may
+    # be cm or inches; both numbers carry the same unit.
+    m = _HEIGHT_WIDE_RE.search(text or '')
+    if m:
+        try:
+            h_val = _parse_num(m.group(1))
+            w_val = _parse_num(m.group(3))
+            unit = m.group(2).lower()
+            if unit.startswith('in') or unit == '"' or unit == '″':
+                h_val *= 2.54
+                w_val *= 2.54
+        except ValueError:
+            pass
+        else:
+            return round(w_val, 2), round(h_val, 2), m.group(0)
 
     # 3) Generic '<N> [x|by] <N>' with cm/in unit
     m = _DIM_RE.search(text or '')

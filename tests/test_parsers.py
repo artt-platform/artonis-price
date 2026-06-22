@@ -224,9 +224,31 @@ class TestDimRegex(unittest.TestCase):
         # Hauteur (height) 60 cm, Largeur (width) 100.5 cm.
         out = self._dim('H. 60 cm - L. 100,5 cm')
         self.assertIsNotNone(out, "French H./L. labels not parsed")
-        # Either order acceptable
         w, h, _ = out
         self.assertEqual({w, h}, {60.0, 100.5})
+
+    def test_osenat_a_vue_labels(self):
+        # Osenat lot 4557 — 'Dimensions à vue : H. 47 x L. 67,8 cm'.
+        out = self._dim('Dimensions à vue : H. 47 x L. 67,8 cm')
+        self.assertIsNotNone(out, "Osenat 'à vue' H./L. not parsed")
+        w, h, _ = out
+        self.assertEqual({w, h}, {47.0, 67.8})
+
+    def test_overall_size_height_wide(self):
+        # BHH lacquer panel — 'Overall Size - 198cm high, 250cm wide'.
+        out = self._dim('Overall Size - 198cm high, 250cm wide')
+        self.assertIsNotNone(out, "'198cm high, 250cm wide' not parsed")
+        w, h, _ = out
+        # 198 = height, 250 = width
+        self.assertEqual((w, h), (250.0, 198.0))
+
+    def test_artcurial_feuille_prefix(self):
+        # Artcurial lot 158 — 'Feuille: 27 x 19 cm - 10 5/8 x 7 1/2 in'.
+        # 'Feuille' (sheet) is a label prefix.  The cm pair leads.
+        out = self._dim('Feuille: 27 x 19 cm - 10 5/8 x 7 1/2 in')
+        self.assertIsNotNone(out, "Artcurial 'Feuille' label not parsed")
+        w, h, _ = out
+        self.assertEqual((w, h), (27.0, 19.0))
 
 
 class TestCurrencyConversion(unittest.TestCase):
