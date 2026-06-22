@@ -133,6 +133,84 @@ _HEIGHT_WIDE_RE = re.compile(
 )
 
 
+# Medium keywords that catalog 'title' fields often append.  Order
+# matters: longer multi-word phrases first so the regex catches them
+# before the single-word fallbacks.
+_TITLE_MEDIUM_TAIL = re.compile(
+    r'[\s,.\-–]+(?:'
+    r'mixed\s*media|technique\s*mixte|huile\s*sur\s*toile|'
+    r'oil\s*on\s*(?:canvas|board|panel|paper|silk)|'
+    r'ink\s*and\s*color|ink\s*on\s*(?:silk|paper)|'
+    r'watercolou?r|gouache|tempera|acrylic|pastel|charcoal|'
+    r'lithograph|etching|engraving|screenprint|'
+    r'lacquer|lacque|laque|encre|'
+    r'oil|ink|pencil'
+    r')\s*\.?$',
+    re.IGNORECASE,
+)
+
+
+def _clean_artwork_title(title):
+    """Final cleanup for catalog 'title' fields.
+
+    Strips trailing year and medium tokens, title-cases ALL-CAPS, and
+    normalises punctuation.  Year and medium belong in dedicated columns;
+    keeping them in the title produces UI lines like
+    'GRAY HOUSES, 1995 OIL'.
+
+    Returns None when input is empty or whitespace.
+    """
+    if not title or not title.strip():
+        return None
+    t = title.strip()
+    # Iteratively peel trailing year / medium / punctuation — order
+    # doesn't matter because we loop until nothing changes.
+    for _ in range(6):
+        before = t
+        # Trailing standalone year: 'Title, 1995' or 'Title 1995'
+        m = re.search(r'[\s,.\-–]+(?:18|19|20)\d{2}\s*\.?$', t)
+        if m:
+            t = t[:m.start()].rstrip(' ,.;:–—-')
+            continue
+        # Trailing medium word(s)
+        m = _TITLE_MEDIUM_TAIL.search(t)
+        if m:
+            t = t[:m.start()].rstrip(' ,.;:–—-')
+            continue
+        # Trailing lonely punctuation
+        t2 = t.rstrip(' ,.;:–—-')
+        if t2 != t:
+            t = t2
+            continue
+        if t == before:
+            break
+    if not t:
+        return None
+    # Title-case ALL-CAPS catalog headings.  Handles words wrapped in
+    # punctuation ('"BATHER"' → '"Bather"') by capitalising the first
+    # letter encountered rather than calling str.capitalize (which sees
+    # the leading quote as the first char and lowercases everything).
+    if t == t.upper() and any(c.isalpha() for c in t):
+        small = {'a', 'an', 'and', 'of', 'the', 'in', 'on', 'for', 'to',
+                 'at', 'with', 'by', 'de', 'la', 'le', 'du', 'des', 'les',
+                 'et', 'sur', 'or'}
+        def smart_cap(word, first):
+            if not first and word.lower() in small:
+                return word.lower()
+            out = []
+            cap_done = False
+            for ch in word:
+                if ch.isalpha() and not cap_done:
+                    out.append(ch.upper())
+                    cap_done = True
+                else:
+                    out.append(ch.lower() if ch.isalpha() else ch)
+            return ''.join(out)
+        words = t.split()
+        t = ' '.join(smart_cap(w, i == 0) for i, w in enumerate(words))
+    return t or None
+
+
 def _title_from_invaluable_slug(url, artist_tokens=None):
     """Recover artwork_title from an Invaluable lot URL when H1 / Description
     parsing failed.  Patterns we handle:
@@ -532,6 +610,15 @@ def parse_lot_page(page, url):
                 out['auction_house_url'] = 'https://www.invaluable.com' + hl.get_attribute('href')
     except Exception:
         pass
+
+    # Final pass: drop trailing year / medium tokens from artwork_title,
+    # and title-case ALL-CAPS catalog titles ('GRAY HOUSES, 1995 OIL' →
+    # 'Gray Houses').  See _clean_artwork_title.
+    cleaned = _clean_artwork_title(out.get('artwork_title'))
+    if cleaned:
+        out['artwork_title'] = cleaned
+    else:
+        out.pop('artwork_title', None)
 
     return out
 

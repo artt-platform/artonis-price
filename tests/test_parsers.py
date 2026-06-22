@@ -350,6 +350,48 @@ class TestArtistMatchingPitfalls(unittest.TestCase):
             self.assertTrue(ok, f"Extra '{extra}' must NOT trigger unmap")
 
 
+class TestCleanArtworkTitle(unittest.TestCase):
+    """Strip trailing year + medium tokens from raw catalog titles.
+
+    Invaluable catalog 'title' fields routinely tack year and medium onto
+    the artwork name ('GRAY HOUSES, 1995 OIL', 'HOUSES WITH DOG, 1996 OIL').
+    These belong in year / medium columns, not in the title.  The cleanup
+    pass must also title-case ALL-CAPS strings.
+    """
+
+    def _clean(self, t):
+        from crawlers.invaluable_detail_parser import _clean_artwork_title
+        return _clean_artwork_title(t)
+
+    def test_strip_trailing_year_and_medium(self):
+        self.assertEqual(self._clean('GRAY HOUSES, 1995 OIL'), 'Gray Houses')
+
+    def test_strip_year_alone(self):
+        self.assertEqual(self._clean('Portrait de Femme, 1954'), 'Portrait de Femme')
+
+    def test_strip_medium_alone(self):
+        self.assertEqual(self._clean('Houses with Dog Oil'), 'Houses with Dog')
+
+    def test_strip_lacquer_medium(self):
+        self.assertEqual(self._clean('Le Printemps Lacquer'), 'Le Printemps')
+
+    def test_keep_year_when_no_trailing_medium_word(self):
+        # If 'YYYY' is in the MIDDLE it stays — it's part of the title.
+        # Only the *trailing* year (after a comma or as the last token)
+        # gets pulled out.
+        self.assertEqual(self._clean('Saigon 1975 Memories'), 'Saigon 1975 Memories')
+
+    def test_title_case_all_caps(self):
+        self.assertEqual(self._clean('SPRING GARDEN'), 'Spring Garden')
+
+    def test_leave_normal_title_alone(self):
+        self.assertEqual(self._clean('Les enfants s’amusent'), 'Les enfants s’amusent')
+
+    def test_empty_and_none(self):
+        self.assertIsNone(self._clean(None))
+        self.assertIsNone(self._clean(''))
+
+
 class TestBonhamsTitleExtraction(unittest.TestCase):
     """Bonhams styled-text title extraction.
 
