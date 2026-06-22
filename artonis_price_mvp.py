@@ -744,22 +744,43 @@ def to_usd(amount, currency):
     return amount, currency
 
 
-def parse_dimensions(text):
-    """Parse dimension string like '200x100cm', '45 x 55 cm', '132cm x 73cm' → (width, height) in cm.
-    Returns (None, None) if not parseable or if only one dimension given."""
+# Sources where the dim string is written as Height × Width (most catalogues:
+# Bonhams, Sotheby's, French houses, plus all Invaluable upstream houses that
+# don't have their own per-source crawler).  Christie's labels W and H
+# explicitly in JSON, so its parser sets order itself.  Le Auction reads from
+# item.width / item.height — both explicit, so the order doesn't matter.
+_HW_FIRST_SOURCES = frozenset({
+    "bonhams", "sothebys", "aguttes", "drouot", "gros-delettrez",
+    "tajan", "artcurial", "millon", "osenat", "invaluable",
+})
+
+
+def parse_dimensions(text, source=None):
+    """Parse a dim string like '200x100cm' / '45 x 55 cm' / '132cm x 73cm' →
+    (width_cm, height_cm).  Returns (None, None) when not parseable.
+
+    Most auction catalogues write H × W in the text — the user-facing display
+    convention.  For those sources (declared in _HW_FIRST_SOURCES above) we
+    interpret the FIRST number as height and the SECOND as width.  Sources
+    that explicitly label their values (Christie's JSON, Le Auction API)
+    set width/height before this function and don't depend on the order."""
     if not text:
         return None, None
     t = clean_text(text).lower()
-    # Normalize × → x, * → x
     t = re.sub(r"[×*]", "x", t)
-    # Pattern: digit(s) x digit(s), ignoring cm markers in between
     m = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:cm)?\s*x\s*(\d+(?:[.,]\d+)?)\s*(?:cm)?", t)
     if not m:
         return None, None
     try:
-        w = float(m.group(1).replace(",", "."))
-        h = float(m.group(2).replace(",", "."))
-        # Sanity: must be reasonable painting sizes (3cm–500cm)
+        a = float(m.group(1).replace(",", "."))
+        b = float(m.group(2).replace(",", "."))
+        if source in _HW_FIRST_SOURCES:
+            # First = height, second = width.
+            w, h = b, a
+        else:
+            # W × H — Christie's text fallback, Le Auction reconstructed
+            # strings, anything else with no declared convention.
+            w, h = a, b
         if 3 <= w <= 500 and 3 <= h <= 500:
             return w, h
     except ValueError:
@@ -767,9 +788,10 @@ def parse_dimensions(text):
     return None, None
 
 
-def compute_area_and_price_per_m2(dimensions, price_amount):
-    """Return (width_cm, height_cm, area_m2, price_per_m2) — any may be None."""
-    w, h = parse_dimensions(dimensions)
+def compute_area_and_price_per_m2(dimensions, price_amount, source=None):
+    """Return (width_cm, height_cm, area_m2, price_per_m2) — any may be None.
+    `source` lets parse_dimensions pick H × W or W × H interpretation."""
+    w, h = parse_dimensions(dimensions, source=source)
     if w is None or h is None:
         return None, None, None, None
     area_m2 = round((w * h) / 10000, 4)

@@ -452,7 +452,9 @@ def insert_sale_result(conn, record):
     kind = classify_kind(record.get("medium", ""), record.get("artwork_title", ""))
     # Sculptures don't have meaningful 2D area — keep w/h pairs as parsed but null out area+ppm
     # Prints/drawings/medals get dim+area kept but $/m² nulled later (different market).
-    w, h, area, _ = compute_area_and_price_per_m2(dims, record.get("hammer_price") or 0)
+    w, h, area, _ = compute_area_and_price_per_m2(
+        dims, record.get("hammer_price") or 0, source=record.get("source"),
+    )
     if kind in ("sculpture", "medal"):
         w, area = None, None
 
