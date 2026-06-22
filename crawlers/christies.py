@@ -308,11 +308,21 @@ def extract_lots_from_page(url, verbose=False):
         else:
             auction_title = "Christie's"
 
-        # Extract dimensions from JSON blob: "height_cm":"130","width_cm":"90"
+        # Extract dimensions: prefer JSON schema ("height_cm","width_cm"), fall back
+        # to "measurements_txt" ("W 26 ½ x H 20 in. (65.0 x 50.6 cm.)") and finally
+        # any "<num> x <num> cm" in the blob (older lots without the schema).
         dims = ""
         m_d = re.search(r'"height_cm":"(\d+(?:\.\d+)?)"\s*,\s*"width_cm":"(\d+(?:\.\d+)?)"', blob)
         if m_d:
             dims = f"{float(m_d.group(2))} x {float(m_d.group(1))} cm"
+        else:
+            m_txt = re.search(r'\((\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*cm\.?\)', blob)
+            if m_txt:
+                dims = f"{float(m_txt.group(1))} x {float(m_txt.group(2))} cm"
+            else:
+                m_alt = re.search(r'(\d{1,3}(?:\.\d+)?)\s*x\s*(\d{1,3}(?:\.\d+)?)\s*cm', blob, re.IGNORECASE)
+                if m_alt:
+                    dims = f"{float(m_alt.group(1))} x {float(m_alt.group(2))} cm"
 
         records.append({
             "source": "christies",
