@@ -189,6 +189,18 @@ After any bulk data change (dedup, swap, unmap, title-clean), run the
 displayed-filter sales (sold + price_usd > 0 + sale_date <= today).  Otherwise
 `auction_count` drifts away from what the UI actually shows.
 
+**Auction-less artists (gallery / exhibition pricing).**  Some VN artists
+(Trần Văn Thảo, Tào Linh, Bùi Văn Tuất, etc. — ~48 in current DB) have no
+auction-house sales but do appear in `price_observations` (collected from
+gallery price-lists and exhibition catalogs).  The recompute falls back to
+`price_observations` rows where `currency='USD'` and `price_amount > 0`
+when an artist has zero auction rows — so `overall_min_usd / max / avg /
+median_per_m2` get populated from gallery prices instead of left null.
+
+`auction_count` still reflects only sale_results, so the UI shows the count
+separately from the price band.  When both auction and observation data exist,
+prefer auction.
+
 ## Things NOT to do (lessons paid for)
 
 - Don't auto-`git add -A`.  The `public/Triển lãm/` folder once leaked private
