@@ -34,6 +34,43 @@ FAKE_MARKERS = [
 ]
 
 
+# Italics that are NOT artwork titles.  Bonhams italicises date
+# qualifiers ('circa 1938') and foreign loan-words ('bình phong'),
+# so we have to filter when picking the title from <i>…</i>.
+_TITLE_SKIP_WORDS = {
+    'circa', 'ca', 'ca.', 'c.', 'vers', 'about', 'around',
+    'approx', 'approximately',
+}
+
+
+def _pick_artwork_title_from_italics(html_fragment):
+    """Pick the artwork title from the italicised text in a Bonhams
+    catalog blob.  Returns '' when nothing plausible is found.
+
+    Rules (in order):
+      1. Skip italics that are pure date qualifiers ('circa', 'vers', …).
+      2. Skip italics that are ≤ 2 words AND another italic exists with
+         ≥ 3 words — this catches foreign loan-words like 'bình phong'
+         while still letting genuinely short titles like 'La Pluie' win
+         when there's nothing longer to pick.
+      3. Return the first remaining italic, cleaned.
+    """
+    if not html_fragment:
+        return ''
+    matches = [clean_text(m) for m in re.findall(r'<i>([^<]+)</i>', html_fragment)]
+    matches = [m for m in matches if m]
+    if not matches:
+        return ''
+    candidates = [
+        m for m in matches
+        if m.lower().strip('.,') not in _TITLE_SKIP_WORDS
+    ]
+    if not candidates:
+        return ''
+    long_ones = [m for m in candidates if len(m.split()) >= 3]
+    return (long_ones[0] if long_ones else candidates[0])
+
+
 def is_fake_or_copy(title, description=""):
     """Return True if title/description indicates a non-authentic work."""
     combined = (title + " " + description).lower()
@@ -114,13 +151,12 @@ def parse_lot(doc):
         if m_birth:
             birth_year = int(m_birth.group(1))
 
-    # Artwork title: inside <i>TITLE</i> if present
-    m_ititle = re.search(r"<i>([^<]+)</i>", styled)
-    artwork_title = clean_text(m_ititle.group(1)) if m_ititle else ""
-    if not artwork_title:
-        m_ititle2 = re.search(r"<i>([^<]+)</i>", catalog_desc_raw)
-        if m_ititle2:
-            artwork_title = clean_text(m_ititle2.group(1))
+    # Artwork title: inside <i>TITLE</i> if present.  Bonhams italicises
+    # the actual title — but ALSO date qualifiers ('circa', 'vers') and
+    # foreign loan-words ('bình phong', 'cánh giấn'), so we can't take
+    # the first match blindly.  See _pick_artwork_title_from_italics.
+    artwork_title = _pick_artwork_title_from_italics(styled) \
+        or _pick_artwork_title_from_italics(catalog_desc_raw) or ""
     if not artwork_title:
         # Fallback: take text after year-paren
         m_title_fb = re.search(r"\(\d{4}(?:[-–]\d{4})?\)\s*(.+)", styled_plain)

@@ -350,5 +350,48 @@ class TestArtistMatchingPitfalls(unittest.TestCase):
             self.assertTrue(ok, f"Extra '{extra}' must NOT trigger unmap")
 
 
+class TestBonhamsTitleExtraction(unittest.TestCase):
+    """Bonhams styled-text title extraction.
+
+    Catalog format puts the artwork title in <i>...</i>, but Bonhams also
+    italicises date qualifiers ('circa', 'vers', 'ca.') and Vietnamese
+    loan-words ('bình phong', 'cánh giấn').  Picking the FIRST <i> match
+    blindly produced artwork_title='circa' for Pham Hau lot 651 — the
+    actual title 'Golden Sunset over Halong Bay' was the second match.
+    """
+
+    def _extract(self, styled):
+        # Mirrors the priority used in crawlers/bonhams.py.
+        from crawlers.bonhams import _pick_artwork_title_from_italics
+        return _pick_artwork_title_from_italics(styled)
+
+    def test_skip_date_qualifier_italic(self):
+        # Pham Hau lot — Golden Sunset over Halong Bay, dated circa 1938-45.
+        styled = (
+            '<b>PHAM HAU (1903-1995)</b><br/>'
+            '<i>circa</i> 1938-1945<br/>'
+            '<i>Golden Sunset over Halong Bay</i><br/>'
+            "signed with artist's seal<br/>"
+            'lacquer, pigment, and gold foil on wood<br/>'
+        )
+        self.assertEqual(self._extract(styled), 'Golden Sunset over Halong Bay')
+
+    def test_pick_first_real_italic(self):
+        # Direct case — first italic IS the title.
+        styled = '<b>ARTIST (1900-1980)</b><br/><i>The Title</i><br/>oil on canvas'
+        self.assertEqual(self._extract(styled), 'The Title')
+
+    def test_skip_short_foreign_term(self):
+        # 'bình phong' is italicised as a loan-word, not a title.  Skip
+        # short foreign terms (≤ 2 words) and pick the longer title.
+        styled = (
+            '<b>ARTIST</b><br/>'
+            '<i>bình phong</i> mounted as<br/>'
+            '<i>The Real Artwork Title</i><br/>'
+            'lacquer on wood'
+        )
+        self.assertEqual(self._extract(styled), 'The Real Artwork Title')
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
