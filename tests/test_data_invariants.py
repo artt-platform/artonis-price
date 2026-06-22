@@ -77,9 +77,17 @@ class TestArtistNameRawConsistency(unittest.TestCase):
             slug = m.group(1)
             # Take the first ~3 dash-tokens before any 4-digit year as
             # the slug's artist hint.
+            # Non-artist tokens that often follow the artist name in
+            # Invaluable slugs.  Stop walking as soon as we hit one.
+            STOP_TOKENS = {
+                'b', 'born', 'né', 'ne', 'nee',
+                'vietnamese', 'vietnam', 'french', 'chinese',
+                'xxe', 'xxi', 'siecle', 'century',
+                'attr', 'attributed',
+            }
             tokens = []
             for t in slug.split('-'):
-                if re.fullmatch(r'\d{4}', t) or t in ('b', 'born', 'vietnamese', 'vietnam', 'french'):
+                if re.fullmatch(r'\d{4}', t) or t in STOP_TOKENS:
                     break
                 tokens.append(t)
                 if len(tokens) >= 4:
