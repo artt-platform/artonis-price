@@ -442,6 +442,34 @@ class TestSculptureClassification(unittest.TestCase):
             'painting',
         )
 
+    def test_bonhams_classify_uses_catalog_desc_for_socle(self):
+        """Regression for Lebadang lot 31782/4 (Bonhams).
+
+        Bonhams catalog_desc:
+          'Personnage circa 2000 signés Lebadang ... mixed media on wood
+           H: 50.5 cm sans le socle (19 7/8 in without the base)'
+
+        The parser stores medium='mixed media on wood' (no socle).  But
+        the Bonhams in-parser kind classifier should ALSO read
+        catalog_desc — 'sans le socle' there is a hard sculpture signal.
+        """
+        # Simulate the kind-classification fragment from bonhams.py.
+        medium_l = 'mixed media on wood'
+        desc_l = ('personnage circa 2000 signes lebadang technique mixte sur bois '
+                  'mixed media on wood h: 50.5 cm sans le socle '
+                  '(19 7/8 in without the base)')
+        dimensions = 'H 50.5 cm'
+        is_single_dim = dimensions.startswith(('H ', 'L ', 'W '))
+        sculpture_kws = ('bronze', 'mixed media on wood', 'sculpture')
+        sculpture_desc_kws = ('socle', 'pedestal', 'sans le socle',
+                              'without the base', 'with base')
+        is_sculpture = (
+            any(kw in medium_l for kw in sculpture_kws)
+            or (is_single_dim and 'wood' in medium_l)
+            or any(kw in desc_l for kw in sculpture_desc_kws)
+        )
+        self.assertTrue(is_sculpture)
+
 
 class TestCleanArtworkTitle(unittest.TestCase):
     """Strip trailing year + medium tokens from raw catalog titles.

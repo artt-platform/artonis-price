@@ -321,10 +321,18 @@ def parse_lot(doc):
     sculpture_kws = ("bronze", "patinated", "carved wood", "mixed media on wood",
                      "terracotta", "ceramic", "marble", "stone", "plaster", "resin",
                      "cast iron", "sculpture")
+    # Catalog-description markers that only 3D works carry — the medium
+    # phrase ('mixed media on wood') sometimes reads paint-on-support, but
+    # 'sans le socle' / 'pedestal' / 'without the base' anywhere in the
+    # description is a hard signal for sculpture (Lebadang lot 31782/4).
+    sculpture_desc_kws = ("socle", "pedestal", "sans le socle",
+                          "without the base", "with base")
     print_kws = ("lithograph", "etching", "screenprint", "estampe", "gravure", "engraving",
                  "silkscreen", "serigraph", "woodcut")
     drawing_kws = ("pencil", "graphite", "crayon", "fusain", "charcoal", "sanguine")
-    if any(kw in medium_l for kw in sculpture_kws) or (is_single_dim and "wood" in medium_l):
+    if (any(kw in medium_l for kw in sculpture_kws)
+            or (is_single_dim and "wood" in medium_l)
+            or any(kw in desc_l for kw in sculpture_desc_kws)):
         kind = "sculpture"
     elif any(kw in medium_l for kw in print_kws) or any(kw in desc_l for kw in print_kws):
         kind = "print"
