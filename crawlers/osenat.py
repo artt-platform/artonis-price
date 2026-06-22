@@ -368,8 +368,11 @@ def parse_lot_description(desc_text):
             artist_match_end = m.end()
         else:
             # No "(YYYY-YYYY)" — Osenat sometimes writes "CHINE..." or "LE THY (vers 1948)"
-            # We still want VN artist names. Try first comma/dash-split.
-            out["artist"] = clean_text(re.split(r"[,(–\-—]", first)[0])
+            # We still want VN artist names. Split on COMMA/paren/em-dash (NOT
+            # hyphen — French hyphenated names like 'JEAN-MICHEL WILMOTTE' or
+            # 'PIERRE LE-TAN' would otherwise truncate to 'JEAN'/'PIERRE LE'
+            # and the matcher would then fuzzy-misassign them to VN artists.
+            out["artist"] = clean_text(re.split(r"[,(–—]", first)[0])
 
     # If description is a single long line (older Osenat lots have no <br>),
     # the artwork title and the rest of the metadata are concatenated after the
