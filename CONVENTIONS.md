@@ -251,6 +251,52 @@ Per-source crawler files still maintain their own `_DIM_RE` etc.  As you
 touch a crawler, lift its inline pattern into `crawlers/common.py` and
 delete the local copy.
 
+## Test harness (added to stop the regression cycle)
+
+Two test files in `tests/`:
+
+- **`tests/test_parsers.py`** — pure-function golden cases for the parser
+  helpers (`_title_from_invaluable_slug`, `parse_dimensions`,
+  `classify_kind`, `detect_support_type`).  Every regression the user has
+  surfaced gets a case added here.  No network, no DB — deterministic.
+
+- **`tests/test_data_invariants.py`** — live-DB shape checks: area_m2
+  matches width×height, price_per_m2_usd matches the documented formula
+  (premium-inclusive when present), every artist_id resolves to an
+  existing artists row, artist_name_raw isn't a strict prefix of the
+  source URL's slug (regression: 'Nguyen Trung' raw for a
+  'nguyen-trung-tin' slug).  Runs against Supabase, slow.
+
+**Workflow rule**: before ANY bulk patch / parser change touching > 10
+rows, run both files.  If they fail, fix the root cause first — don't
+patch around it.  After the patch, run them again.  Add a new test case
+for the bug being fixed so it can't sneak back.
+
+`python3 tests/test_parsers.py && python3 tests/test_data_invariants.py`
+
+## Why issues kept recurring (post-mortem)
+
+Captured here as a lesson, not a generic guideline.  Bugs we hit during
+the session that were the SAME bug surfacing twice or three times in
+slightly different forms:
+
+1. **Data-patch ≠ code-fix.**  Patching specific DB rows fixes the
+   visible lot for the user but leaves the parser still producing bad
+   output for any new row.  Always fix the parser AND patch the data,
+   then verify both ends.
+2. **`artist_id` + `artist_name_raw` + `sale_location` are independent**
+   fields.  Nulling one without thinking about the others creates
+   inconsistent display (Nguyen Trung Tin lot bug).  Touch the whole
+   record when correcting an attribution.
+3. **Re-sweep without sample validation.**  A sweep that "patched 224
+   lots" means nothing without spot-checking 5–10 random rows from the
+   patched set against the source page.  Add this step before declaring
+   done.
+4. **Slug-fallback was too narrow.**  Only handled the Christie's
+   `<title>-by-<artist>-<years>` pattern.  Upstream Invaluable houses
+   use four other patterns (Bonhams, Litchfield, Aguttes, etc.).  See
+   the docstring in `_title_from_invaluable_slug` for the current map.
+
 ## Things NOT to do (lessons paid for)
 
 - Don't auto-`git add -A`.  The `public/Triển lãm/` folder once leaked private
