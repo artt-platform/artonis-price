@@ -192,6 +192,35 @@ class TestDimRegex(unittest.TestCase):
         self.assertIsNotNone(out)
         self.assertAlmostEqual(out[0], 89.5, places=1)
 
+    def test_h_w_labels_inches(self):
+        # Regression: BHH lots 19595, 19596, 19609 — '48"h, 96"w' style
+        # with explicit H/W labels.
+        out = self._dim('Dimensions (H, W, D): 48"h, 96"w overall')
+        self.assertIsNotNone(out, "'48\"h, 96\"w' not parsed")
+        # H = 48" = 121.92 cm, W = 96" = 243.84 cm
+        # parser returns (w_cm, h_cm, raw) — Bonhams/Invaluable H × W convention
+        # is handled at storage time; here we just want both numbers extracted.
+        w, h, _ = out
+        vals = {round(w, 1), round(h, 1)}
+        self.assertIn(121.9, vals)
+        self.assertIn(243.8, vals)
+
+    def test_by_separator_double_unit(self):
+        # Regression: BHH lot 19607 — '160.5cm by 122cm' style.
+        out = self._dim('Dimensions: 160.5cm by 122cm')
+        self.assertIsNotNone(out, "'160.5cm by 122cm' not parsed")
+        w, h, _ = out
+        self.assertEqual({w, h}, {160.5, 122.0})
+
+    def test_french_h_l_labels(self):
+        # Regression: Pham Hau lot 19270 — 'H. 60 cm - L. 100,5 cm'.
+        # Hauteur (height) 60 cm, Largeur (width) 100.5 cm.
+        out = self._dim('H. 60 cm - L. 100,5 cm')
+        self.assertIsNotNone(out, "French H./L. labels not parsed")
+        # Either order acceptable
+        w, h, _ = out
+        self.assertEqual({w, h}, {60.0, 100.5})
+
 
 class TestCurrencyConversion(unittest.TestCase):
     """FX rates declared in crawlers/invaluable_detail_runner.py.  These

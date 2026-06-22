@@ -94,13 +94,29 @@ def _h1_to_title_year(h1, artist_name):
 
 
 _FRAC_NUM = r'\d+(?:\s+\d+/\d+)?(?:[.,]\d+)?'
-# Allow the unit between the two numbers too — '100cm x 100cm' is a common
-# Vietnamese-catalogue formatting (NTR 'Message' lot regressed because the
-# regex only allowed an optional quote between number and 'x', not 'cm').
+# Generic 'W [unit] [x|by] H [unit]'.  Allow optional unit between the two
+# numbers ('100cm x 100cm'), allow 'by' as a separator, and accept the
+# digit-comma-digit French decimal ('100,5').
 _DIM_RE = re.compile(
     rf'({_FRAC_NUM})\s*(?:cm|inches?|in|["″])?\s*'
-    rf'[xX×]\s*'
-    rf'({_FRAC_NUM})\s*(cm|inches?|in|"|″)(?:\s|$|[,.;])'
+    rf'(?:[xX×]|\bby\b)\s*'
+    rf'({_FRAC_NUM})\s*(cm|inches?|in|"|″)(?:\s|$|[,.;])',
+    re.IGNORECASE,
+)
+
+# Inch-with-H/W-suffix style: '48"h, 96"w' or '48 h x 96 w' — Cadmore /
+# Litchfield use this.  Captures (h_inches, w_inches).
+_HW_INCH_RE = re.compile(
+    rf'({_FRAC_NUM})\s*["″]?\s*h\b[\s,]+'
+    rf'({_FRAC_NUM})\s*["″]?\s*w\b',
+    re.IGNORECASE,
+)
+
+# French Hauteur/Largeur labels: 'H. 60 cm - L. 100,5 cm' or 'H 60 x L 100.5'.
+_HL_CM_RE = re.compile(
+    rf'\bh(?:auteur)?\.?\s*({_FRAC_NUM})\s*cm[\s\-–,]+'
+    rf'l(?:argeur)?\.?\s*({_FRAC_NUM})\s*cm',
+    re.IGNORECASE,
 )
 
 
@@ -204,8 +220,37 @@ def _parse_num(s):
 
 
 def _parse_dims_text(text):
-    """Find first w x h cm/in pattern, return (w_cm, h_cm, raw_match) or None."""
-    m = _DIM_RE.search(text)
+    """Find first dim pattern, return (w_cm, h_cm, raw_match) or None.
+
+    Tries in order:
+      1. H-then-W inch labels:    '48"h, 96"w'          (Cadmore / Litchfield)
+      2. French Hauteur/Largeur:  'H. 60 cm - L. 100,5 cm'   (Pham Hau lots)
+      3. Generic '<N> [x|by] <N> cm/in/"' pattern       (everyone else)
+    """
+    # 1) H/W inch labels — explicit, returns (w_cm, h_cm) with H/W order known
+    m = _HW_INCH_RE.search(text or '')
+    if m:
+        try:
+            h_in = _parse_num(m.group(1))
+            w_in = _parse_num(m.group(2))
+        except ValueError:
+            pass
+        else:
+            return round(w_in * 2.54, 2), round(h_in * 2.54, 2), m.group(0)
+
+    # 2) French H./L. cm labels — H = hauteur (height), L = largeur (width)
+    m = _HL_CM_RE.search(text or '')
+    if m:
+        try:
+            h_cm = _parse_num(m.group(1))
+            w_cm = _parse_num(m.group(2))
+        except ValueError:
+            pass
+        else:
+            return round(w_cm, 2), round(h_cm, 2), m.group(0)
+
+    # 3) Generic '<N> [x|by] <N>' with cm/in unit
+    m = _DIM_RE.search(text or '')
     if not m:
         return None
     try:
