@@ -250,6 +250,17 @@ def crawl(conn, sale_specs=None, delay=0.5, verbose=True, filter_vn=False, max_p
                               status="error", note=str(e)[:200])
                 continue
 
+            # `portalKey` is the canonical Bidspirit ID used in deep-link URLs
+            # (`/ui/lotPage/leauction/source/catalog/auction/{portalKey}/lot/{id}`).
+            # It lives inside auction.auctionDays[<this-day>] alongside the
+            # dayId. Without it the lot URL becomes a non-functional hash link.
+            portal_key = None
+            au = (cat or {}).get("auction") or {}
+            for ad in (au.get("auctionDays") or []):
+                if ad.get("id") == did:
+                    portal_key = ad.get("portalKey")
+                    break
+
             items = (cat or {}).get("items", []) or []
             inserted_this = 0
             for item in items:
@@ -297,7 +308,14 @@ def crawl(conn, sale_specs=None, delay=0.5, verbose=True, filter_vn=False, max_p
                     continue
 
                 item_id = item.get("id") or item.get("itemIndex")
-                lot_url = f"{HOUSE_URL}#catalog~{aid}~{did}~item~{item_id}"
+                if portal_key and item_id:
+                    lot_url = (
+                        f"https://leauction.bidspirit.com/ui/lotPage/leauction/source/"
+                        f"catalog/auction/{portal_key}/lot/{item_id}/"
+                    )
+                else:
+                    # Fallback to hash-format URL if portalKey missing
+                    lot_url = f"{HOUSE_URL}#catalog~{aid}~{did}~item~{item_id}"
 
                 rec = {
                     "source": SOURCE,
