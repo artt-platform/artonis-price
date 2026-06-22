@@ -452,8 +452,17 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
                 slug_norm = re.sub(r"\s+(?:1[89]\d{2}|20[0-2]\d)(?:\s+.*)?$", "", slug_norm).strip()
                 if slug_norm in exclusions:
                     continue
+                # Match also when the slug omits the family name ('trong-
+                # kiem' for catalog 'nguyen trong kiem') OR vice versa.
+                # Without the endswith branches, Millon skipped lot 82 of
+                # vente 4201 (Nguyễn Trọng Kiệm 'Đường quê').
                 slug_is_vn = (slug_norm in vn_catalog or
-                              any(slug_norm == k or slug_norm.startswith(k + " ") or k.startswith(slug_norm + " ") for k in vn_catalog))
+                              any(slug_norm == k
+                                  or slug_norm.startswith(k + " ")
+                                  or k.startswith(slug_norm + " ")
+                                  or k.endswith(" " + slug_norm)
+                                  or slug_norm.endswith(" " + k)
+                                  for k in vn_catalog))
                 if not slug_is_vn:
                     continue
             # Fetch lot detail for artist name + title + dimensions

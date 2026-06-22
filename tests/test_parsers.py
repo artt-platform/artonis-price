@@ -292,6 +292,32 @@ class TestArtistMatchingPitfalls(unittest.TestCase):
         )
         self.assertTrue(ok, "Exact-token slug should validate")
 
+    def test_slug_omitting_family_name_should_match_catalog(self):
+        """Millon (and other French houses) often label Vietnamese artists
+        without the family name in the slug — 'trong-kiem' for 'Nguyen Trong
+        Kiem'.  The VN-whitelist prefilter must catch this so the lot isn't
+        skipped before fetch.  Reproduces the bug that hid Nguyễn Trọng Kiệm
+        lot 82 in Millon vente 4201.
+        """
+        VN_CATALOG = {'nguyen trong kiem'}
+
+        def slug_is_vn(slug_norm, vn_catalog):
+            return slug_norm in vn_catalog or any(
+                slug_norm == k
+                or slug_norm.startswith(k + ' ')
+                or k.startswith(slug_norm + ' ')
+                or k.endswith(' ' + slug_norm)
+                or slug_norm.endswith(' ' + k)
+                for k in vn_catalog
+            )
+
+        # Bug case: slug omits family name
+        self.assertTrue(slug_is_vn('trong kiem', VN_CATALOG))
+        # Exact match
+        self.assertTrue(slug_is_vn('nguyen trong kiem', VN_CATALOG))
+        # Non-VN artist
+        self.assertFalse(slug_is_vn('victor tardieu', VN_CATALOG))
+
     def test_short_extra_token_rejected(self):
         # Extra token like '20th', 'royal', 'large' must NOT cause unmap
         # (they're descriptors, not name extensions).
