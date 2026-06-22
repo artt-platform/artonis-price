@@ -236,27 +236,46 @@ def parse_lot_page(page, url):
         desc = _section_value(body, 'Description', _SECTION_STOPS)
         if desc:
             lines = [l.strip() for l in desc.split('\n') if l.strip()]
-            # Drop artist info lines (all-caps name, 'Vietnamese, b. YYYY', 'Vietnam, YYYY-')
             content_lines = []
             for L in lines:
-                if L == L.upper() and len(L.split()) <= 4 and L.replace(' ','').isalpha():
-                    continue  # all-caps artist line
-                if re.match(r'^Vietnamese?,?\s+b\.?\s*\d{4}', L, re.IGNORECASE):
+                # all-caps short name "NGUYEN GIA TRI"
+                if L == L.upper() and len(L.split()) <= 5 and L.replace(' ','').isalpha():
                     continue
+                # 'ARTIST NAME (VIETNAMESE, YYYY-YYYY)' or 'ARTIST (YYYY-YYYY)' or 'NGUYEN GIA TRI (1908-1993)'
+                if re.match(r'^[A-ZÀ-Ý][A-ZÀ-Ý\s\-\.]{2,}\s*\([^)]*\d{4}[^)]*\)\s*$', L):
+                    continue
+                # 'Vietnamese, b. YYYY' / 'Vietnamese, YYYY-YYYY'
+                if re.match(r'^\(?Vietnamese?,?\s+b?\.?\s*\d{4}', L, re.IGNORECASE):
+                    continue
+                # '(Vietnamese, 1908-1993)' garbage line
+                if re.match(r'^\(\s*Vietnamese?,?\s*\d{4}\s*[-–]?\s*\d{0,4}\s*\)\s*$', L, re.IGNORECASE):
+                    continue
+                # 'Vietnam, YYYY-' line
                 if re.match(r'^Vietnam,?\s*\d{4}\-?\s*$', L, re.IGNORECASE):
                     continue
+                # '(b. YYYY)' line
                 if re.match(r'^\(?b\.?\s*\d{4}\)?\s*$', L):
                     continue
                 content_lines.append(L)
             if content_lines:
                 cand = content_lines[0].rstrip('.,;: ').strip()
-                # Strip trailing ", YYYY" → year
                 m_yr = re.search(r',\s*(\d{4})\s*$', cand)
                 if m_yr:
                     out['year'] = m_yr.group(1)
                     cand = cand[:m_yr.start()].strip()
                 if 2 <= len(cand) <= 200:
                     out['artwork_title'] = cand
+
+    # Final safety: if artwork_title ended up looking like artist+year info
+    # ('(Vietnamese, 1908-1993)', 'NGUYEN GIA TRI', etc.), clear it.
+    cur_t = (out.get('artwork_title') or '').strip()
+    if cur_t:
+        if re.match(r'^\(\s*[A-Za-zà-ÿÀ-Ý]+,?\s*(?:b\.?\s*)?\d{4}\s*[-–]?\s*\d{0,4}\s*\)\s*$', cur_t):
+            out.pop('artwork_title', None)
+        elif re.match(r'^[A-ZÀ-Ý][A-ZÀ-Ý\s\-\.]{2,}\s*\([^)]*\d{4}[^)]*\)?\s*$', cur_t):
+            out.pop('artwork_title', None)
+        elif re.fullmatch(r'\d+(\.\d+)?\s*[xX×]\s*\d+(\.\d+)?\s*(?:cm|in|inches?)?', cur_t):
+            out.pop('artwork_title', None)
 
     # Safety: if extracted title is just a dimensions string (parser cleanup
     # removed everything else), recover the real title from the URL slug.

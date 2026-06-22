@@ -416,9 +416,15 @@ _SUPPORT_PATTERNS = [
     ("silk",    [(r"silk", True), (r"soie", True), (r"lụa", True)]),
     ("canvas",  [(r"canvas", True), (r"toile", True), (r"vải", True)]),
     ("paper",   [(r"paper", True), (r"papier", True), (r"giấy", True),
-                 (r"vélin", True), (r"arches", True)]),
-    ("panel",   [(r"panel", True), (r"panneau", True), (r"carton", True), (r"board", True),
-                 (r"bois", True), (r"isorel", True), (r"masonite", True)]),
+                 (r"vélin", True), (r"arches", True),
+                 # Cardboard / pasteboard is paper-family (rigid paperboard),
+                 # not wood. 'Huile sur carton' / 'sơn dầu trên bìa cứng' →
+                 # group with paper for $/m² peer comparison.
+                 (r"carton", True), (r"cardboard", False), (r"bìa cứng", False),
+                 (r"bia cung", False)]),
+    ("panel",   [(r"panel", True), (r"panneau", True), (r"board", True),
+                 (r"bois", True), (r"isorel", True), (r"masonite", True),
+                 (r"wood", True), (r"gỗ", True)]),
     ("metal",   [(r"plate", True), (r"plaque", True), (r"métal", True), (r"metal", True),
                  (r"copper", True), (r"cuivre", True)]),
 ]
