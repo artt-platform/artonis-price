@@ -310,7 +310,7 @@ def crawl(conn, sale_specs=None, delay=0.5, verbose=True, filter_vn=False, max_p
                 item_id = item.get("id") or item.get("itemIndex")
                 if portal_key and item_id:
                     lot_url = (
-                        f"https://leauction.bidspirit.com/ui/lotPage/leauction/source/"
+                        f"https://uk.bidspirit.com/ui/lotPage/leauction/source/"
                         f"catalog/auction/{portal_key}/lot/{item_id}/"
                     )
                 else:

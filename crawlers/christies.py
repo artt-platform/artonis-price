@@ -311,6 +311,7 @@ def extract_lots_from_page(url, verbose=False):
         # Extract dimensions: prefer JSON schema ("height_cm","width_cm"), fall back
         # to "measurements_txt" ("W 26 ½ x H 20 in. (65.0 x 50.6 cm.)") and finally
         # any "<num> x <num> cm" in the blob (older lots without the schema).
+        # Canonical storage: W × H (parse_dimensions assumes this order).
         dims = ""
         m_d = re.search(r'"height_cm":"(\d+(?:\.\d+)?)"\s*,\s*"width_cm":"(\d+(?:\.\d+)?)"', blob)
         if m_d:
