@@ -201,6 +201,22 @@ median_per_m2` get populated from gallery prices instead of left null.
 separately from the price band.  When both auction and observation data exist,
 prefer auction.
 
+## Medium extraction from page text
+
+Christie's / Sotheby's / Invaluable don't expose `medium` in a labelled JSON
+field — it sits in the description block immediately before the dimensions:
+
+  …'h t chu 1970' (lower right), lacquer on panel, 50 x 100 cm. (19 5⁄8 …
+
+Pattern to capture: a phrase composed of a material noun + 'on'/'sur' + a
+substrate noun, immediately followed by the cm-dimension.  See the regex
+in the one-off `medium_sweep.py` (committed in this session's docs only,
+not as a permanent crawler step).  When refactoring crawlers, lift this
+into `crawlers/common.py::MEDIUM_PATTERN` so all three sources share it.
+
+After extracting `medium`, run `detect_support_type(medium, title)` to set
+`support_type`.  That's what unlocks per-support `$/m²` peer comparison.
+
 ## Things NOT to do (lessons paid for)
 
 - Don't auto-`git add -A`.  The `public/Triển lãm/` folder once leaked private
