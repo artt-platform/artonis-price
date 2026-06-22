@@ -9,9 +9,19 @@ from crawlers.common import parse_amount, parse_date, insert_sale_result, clean_
 BASE = "https://www.invaluable.com"
 
 # Vietnamese artist slug-IDs on Invaluable.
-# Original 9 discovered manually; 13 added via sitemap_artist_sold_{1..5}.xml scan
-# (2026-06-20). Slug order varies (firstname-lastname OR lastname-firstname) — depends
-# on how the artist was first indexed.
+#
+# UNLIKE other crawlers, this list cannot be derived from
+# data/vn_artist_catalog.py.  Invaluable's per-artist URL embeds an
+# opaque 10-char hash ID ('pho-le-e2gj8yti0x') with no public name→hash
+# mapping.  Hashes are discovered manually via:
+#   - sitemap_artist_sold_{1..5}.xml scan (sitemap walk)
+#   - invaluable.com/artists search via Playwright (Cloudflare blocks curl)
+#
+# Coverage gap to close — these catalog artists likely have Invaluable
+# pages but their hash slug is not yet discovered:
+#   Lê Huy Hòa, Lưu Công Nhân, Nguyễn Trọng Kiệm (the rest of the Nhân
+#   Hòa Hậu Kiệm group — Trần Lưu Hậu already seeded as hau-tran-luu).
+# Original 9 discovered manually; 13 added via sitemap scan 2026-06-20.
 VN_ARTISTS = [
     # ─── Đông Dương / Bộ Tứ Trời Âu (highest auction volume) ───
     ("pho-le-e2gj8yti0x", "Le Pho"),

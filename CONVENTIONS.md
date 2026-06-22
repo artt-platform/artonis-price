@@ -56,8 +56,8 @@ JSON → measurements_txt `(W x H cm.)` → bare text — see `crawlers/christie
 ## Discovery: catalog-driven, not artist-driven
 
 The crawler must enumerate work via auction-house **catalogs**, then filter
-each lot against `data/vn_artist_catalog.py` (currently 246 names).  Do
-NOT hardcode a per-house artist whitelist.
+each lot against `data/vn_artist_catalog.py` (293 names as of 2026-06).
+Do NOT hardcode a per-house artist whitelist.
 
 - Audit on 2026-06 found 150 missing VN lots across 17 Millon ventes — root
   cause was a 16-name `VN_ARTIST_SLUGS` list in `crawlers/millon.py`.
@@ -74,6 +74,40 @@ NOT hardcode a per-house artist whitelist.
 - The artist-driven entry point (`crawlers/millon.py::crawl_all`) is now a
   shim forwarding to `crawl_past_catalogs(discovery='broad')`.  Apply the
   same pattern when adding a new auction-house crawler.
+
+### Auto-deriving per-crawler keyword lists
+
+Where a crawler genuinely needs a list of slugs / fragments (because the
+source URL or lot HTML doesn't carry the artist's full name), DERIVE
+that list from `VN_ARTIST_CATALOG` at module import time.  Never hardcode.
+
+Pattern (see `crawlers/gros_delettrez.py::_build_vn_slug_kws` and
+`crawlers/roseberys.py::_build_vn_fragments`):
+
+```python
+def _build_vn_slug_kws():
+    from vn_artist_catalog import VN_ARTIST_CATALOG
+    kws = set()
+    for normalized in VN_ARTIST_CATALOG:
+        kws.add(normalized.replace(' ', '-'))     # 'nguyen-trong-kiem'
+        tokens = normalized.split()
+        if len(tokens) >= 3:                       # family-elision
+            kws.add('-'.join(tokens[1:]))         # 'trong-kiem'
+    return tuple(sorted(kws))
+```
+
+Adding a new artist to `vn_artist_catalog.py` now expands coverage
+across Millon, Gros & Delettrez, Roseberys, Aguttes, Artcurial,
+Bonhams, Christie's, Drouot, Heritage, Larasati, Le Auction, Osenat,
+Phillips, Ravenel, Sotheby's, Tajan, Global Auction, Chons —
+automatically.  No per-crawler list to keep in sync.
+
+### Exception: Invaluable
+
+Invaluable's per-artist URL embeds an opaque 10-char hash ID
+(`pho-le-e2gj8yti0x`).  There is no public `name → hash` mapping, so
+new artist coverage requires manual sitemap or Playwright lookup.  The
+list in `crawlers/invaluable.py::VN_ARTISTS` is the documented exception.
 
 ## Artist mapping
 

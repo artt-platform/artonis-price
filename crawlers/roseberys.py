@@ -20,14 +20,34 @@ from crawlers.common import insert_sale_result, clean_artist_name, log_crawl_run
 BASE = "https://www.roseberys.co.uk"
 GBP_USD = 1.27  # approximate; refresh when running annual stats
 
-# Vietnamese name fragments — used to filter lot blocks before insert.
-_VN_FRAGMENTS = (
-    "vietnam", "vietnamese", "lebadang", "le ba dang", "le pho", "mai trung",
-    "vu cao dam", "le thi luu", "nguyen ", "tran ", "bui ", "duong bich",
-    "pham hau", "pham an hai", "dinh quan", "dang xuan", "dao hai phong",
-    "le thanh son", "hong viet dung", "thanh chuong", "tran luu hau",
-    "to ngoc van", "tran van can", "phan chanh", "ho huu thu",
-)
+# Vietnamese name fragments — substring-matched against lot text.
+# Auto-derived from data/vn_artist_catalog.py.  Add an artist to the
+# catalog and they're covered by Roseberys automatically — no hardcoded
+# list to keep in sync.  See CONVENTIONS.md 'Discovery: catalog-driven'.
+def _build_vn_fragments():
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent / "data"))
+        for m in list(_sys.modules.keys()):
+            if "vn_artist_catalog" in m:
+                del _sys.modules[m]
+        from vn_artist_catalog import VN_ARTIST_CATALOG
+    except ImportError:
+        return ()
+    frags = {"vietnam", "vietnamese"}
+    for normalized in VN_ARTIST_CATALOG:
+        if normalized and len(normalized) >= 5:
+            frags.add(normalized)
+            tokens = normalized.split()
+            # Family-elision: 'trong kiem' (no 'nguyen')
+            if len(tokens) >= 3:
+                frags.add(' '.join(tokens[1:]))
+    # Slugified variants that catalog normalization doesn't cover
+    frags.update(("lebadang", "le ba dang"))
+    return tuple(sorted(frags))
+
+_VN_FRAGMENTS = _build_vn_fragments()
 
 # Roseberys lot block parser. Group order:
 #   1 lot_no, 2 artist, 3 nationality, 4 dates (YYYY or YYYY-YYYY),

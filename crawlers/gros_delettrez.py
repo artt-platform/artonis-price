@@ -25,20 +25,39 @@ H = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 
 BASE = "https://www.gros-delettrez.com"
 
-# Slugs that mark a tracked VN artist (lowercase, dash-separated).
-VN_SLUG_KWS = (
-    "le-ba-dang", "lebadang",
-    "diem-phung", "phung-thi",
-    "vu-cao-dam", "cao-dam-vu", "dam-vu",
-    "le-pho", "le-thi-luu",
-    "mai-trung", "mai-thu",
-    "nguyen-gia-tri", "nguyen-phan-chanh",
-    "bui-xuan-phai", "nguyen-sang", "to-ngoc-van",
-    "ho-huu-thu", "do-quang-em",
-    "nguyen-tu-nghiem",
-    "tran-luu-hau", "luu-cong-nhan",
-    "alix-ayme",  # Alix Aymé — French painter of Vietnamese subjects
-)
+# Slugs that mark a tracked VN artist.  Auto-derived from
+# data/vn_artist_catalog.py so adding a new artist to the catalog
+# enables Gros & Delettrez coverage automatically — no per-crawler list
+# to keep in sync.  See CONVENTIONS.md 'Discovery: catalog-driven'.
+def _build_vn_slug_kws():
+    try:
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
+        for m in list(sys.modules.keys()):
+            if "vn_artist_catalog" in m:
+                del sys.modules[m]
+        from vn_artist_catalog import VN_ARTIST_CATALOG
+    except ImportError:
+        return ()
+    kws = set()
+    for normalized in VN_ARTIST_CATALOG:
+        if not normalized or len(normalized) < 3:
+            continue
+        # 'nguyen trong kiem' → 'nguyen-trong-kiem'
+        kws.add(normalized.replace(' ', '-'))
+        # Family-elision: French houses often drop the family name on the
+        # URL slug — 'trong-kiem' instead of 'nguyen-trong-kiem'.  Keep
+        # both so the substring filter catches both forms.
+        tokens = normalized.split()
+        if len(tokens) >= 3:
+            kws.add('-'.join(tokens[1:]))
+    # Variants outside the catalog normalisation.  'lebadang' is how
+    # Lê Bá Đáng is slugified abroad; the catalog has 'le ba dang'.
+    kws.update(('lebadang', 'diem-phung', 'cao-dam-vu', 'dam-vu', 'mai-thu'))
+    return tuple(sorted(kws))
+
+VN_SLUG_KWS = _build_vn_slug_kws()
 
 
 def _strip(s):
