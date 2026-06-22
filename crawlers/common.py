@@ -441,6 +441,48 @@ def detect_support_type(medium, title):
     return None
 
 
+# ── Shared text-extraction patterns used by multiple crawlers ──────────────
+# Centralized here so the regex doesn't drift across the 18 crawler files.
+# Lift inline `_DIM_RE` / `_YEAR_RE` / `_MEDIUM_RE` definitions per crawler
+# into one of these as you touch them.
+
+# Dimensions in "W x H cm" or "W x H in" text.  For per-source H × W
+# convention, callers use parse_dimensions(text, source=...) from
+# artonis_price_mvp.py — that helper inspects _HW_FIRST_SOURCES and swaps
+# the captured pair when the source is H × W.
+DIM_TEXT_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*(cm|in|inches?|mm)?",
+    re.IGNORECASE,
+)
+
+# Three-dim depth pattern for reliefs / lacquer panels — first pair is the
+# face (canvas), third is depth.  Use this BEFORE DIM_TEXT_RE so we don't
+# greedily grab the (B by C) pair.
+DIM_3D_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:[x×]|by)\s*"
+    r"(\d+(?:[.,]\d+)?)\s*(?:[x×]|by)\s*"
+    r"\d+(?:[.,]\d+)?\s*cm",
+    re.IGNORECASE,
+)
+
+# 4-digit year extracted from "trailing , YYYY" suffix.  Used by parsers
+# that split a year off the end of an H1 / description line.
+TRAILING_YEAR_RE = re.compile(r",\s*(\d{4})\b\s*[.,;]?\s*$")
+
+# Medium = material + 'on'/'sur' + substrate, immediately before a cm-dim.
+# Christie's / Sotheby's / Invaluable / Aguttes / etc. all use this phrasing
+# in their description block.  Used by the medium backfill sweeps; lift
+# inline copies into here when refactoring per-source extractors.
+MEDIUM_TEXT_RE = re.compile(
+    r'((?:lacquer|oil|ink|mixed\s+media|acrylic|watercolour|watercolor|'
+    r'gouache|tempera|pastel|charcoal|pencil|crayon|silver|gold|eggshell|color)'
+    r'(?:\s+(?:and|et|sur|on)\s+(?:lacquer|oil|ink|silver|gold|eggshell|color|colour))?\s+'
+    r'(?:on|sur)\s+'
+    r'(?:panel|silk|paper|canvas|wood|board|cardboard|carton|metal|copper|linen|toile))',
+    re.IGNORECASE,
+)
+
+
 def insert_sale_result(conn, record):
     """Upsert a sale_result row. record must contain at minimum: source, source_url, artist_name_raw.
     artist_id is resolved via upsert_artist if artist_name_raw is provided."""
