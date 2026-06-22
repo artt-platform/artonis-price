@@ -217,6 +217,40 @@ into `crawlers/common.py::MEDIUM_PATTERN` so all three sources share it.
 After extracting `medium`, run `detect_support_type(medium, title)` to set
 `support_type`.  That's what unlocks per-support `$/m²` peer comparison.
 
+## Frontend shared lib (ArtonisV2)
+
+Single source of truth for cross-page utilities:
+
+- `src/lib/format.ts` — `formatUSD`, `formatDimHW`, `priceBand`, `trustBadge`,
+  `Band` type.  Every page that renders a price or dimension imports from
+  here; the local copies were removed in the session refactor.
+- `src/lib/types.ts` — `SaleRow`, `SaleSummaryRow`, `SalesPageRow`, `ObsRow`,
+  `ExhRow`, `ArtistJoin`.  Match the Supabase column lists declared in the
+  page's `.select(...)` clause — when you change a select, update the
+  matching type here.
+- `src/components/PriceBandCards.tsx` — the auction + gallery Q1–Q3 cards.
+  Take `Band` objects as props; trust badge is rendered internally.
+
+When adding a new page that shows prices, use these imports first.  Don't
+copy-paste `formatUSD` again — that's how the divergence crept in initially.
+
+## Backend shared regex (crawlers/common.py)
+
+The session added canonical patterns to `crawlers/common.py`:
+
+- `DIM_TEXT_RE` — `<num> x <num> [cm|in|mm]` text-only dim.  Use with
+  `parse_dimensions(text, source=...)` from `artonis_price_mvp.py` to apply
+  the per-source H × W convention.
+- `DIM_3D_RE` — `<num> by <num> by <num> cm` reliefs / lacquer panels.
+  Run before `DIM_TEXT_RE` to grab the canvas face first.
+- `TRAILING_YEAR_RE` — `…, 1995` suffix.
+- `MEDIUM_TEXT_RE` — `<material> on <substrate>` phrase immediately before
+  a cm-dim.  Used by Christie's / Sotheby's / Invaluable medium backfills.
+
+Per-source crawler files still maintain their own `_DIM_RE` etc.  As you
+touch a crawler, lift its inline pattern into `crawlers/common.py` and
+delete the local copy.
+
 ## Things NOT to do (lessons paid for)
 
 - Don't auto-`git add -A`.  The `public/Triển lãm/` folder once leaked private
