@@ -155,11 +155,29 @@ def _title_from_invaluable_slug(url, artist_tokens=None):
     slug = m.group(1)
     title_slug = None
 
-    # A) explicit 'by ARTIST years' separator
-    m_by = re.match(r'(.+?)-by-[a-z\-]+\d{4}-\d{4}', slug)
+    # A) explicit 'by ARTIST years' separator.  Accept both birth-death
+    # pair ('1908-1993') AND single year ('1922').  Christie's-style
+    # primarily uses pairs, but some Invaluable lots have only one year.
+    m_by = re.match(r'(.+?)-by-[a-z\-]+\d{4}(?:-\d{2,4})?', slug)
     if m_by:
         title_slug = m_by.group(1)
     elif artist_tokens:
+        # F) title-first then artist tokens in the middle of the slug.
+        # 'two-girls-nguyen-gia-tri-1908-1993-27-x-33-5-cm-i-100'.
+        # Find a contiguous run of artist tokens, take everything before
+        # as the title (when it's at least 2 tokens long).
+        parts = slug.split('-')
+        n_tokens = len(artist_tokens)
+        for i in range(1, len(parts) - n_tokens + 1):
+            # Check if parts[i..i+n_tokens] is some permutation of artist_tokens
+            window = set(parts[i:i + n_tokens])
+            if window == artist_tokens:
+                title_parts = parts[:i]
+                if 2 <= len(title_parts) <= 8:
+                    title_slug = '-'.join(title_parts)
+                break
+
+    if title_slug is None and artist_tokens:
         # B / C / D: artist comes first; walk past artist tokens and the
         # year (or 'b. year') metadata that often follows, then take what's
         # left minus the trailing lot number + suffix codes.

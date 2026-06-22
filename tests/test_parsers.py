@@ -40,13 +40,20 @@ class TestSlugFallback(unittest.TestCase):
         ('DXH-no-title-in-slug',
          'https://www.invaluable.com/auction-lot/dang-xuan-hoa-103-c-cf44656a5c',
          None, {'dang', 'xuan', 'hoa'}),
-        # TODO: handle 'title-first then artist (no -by- marker)' pattern.
-        # URL: the-three-gates-nguyen-gia-tri-1908-1993-41-x-36--101-c-…
-        # We can detect 'nguyen-gia-tri' in the middle if artist_tokens are
-        # supplied and split the title off — slug-fallback doesn't yet.
-        # ('NTGT-three-gates',
-        #  'https://www.invaluable.com/auction-lot/the-three-gates-nguyen-gia-tri-1908-1993-41-x-36--101-c-c02447f8ee',
-        #  'The Three Gates', {'nguyen', 'gia', 'tri'}),
+        # Title-first then artist tokens (no '-by-' marker).  Lots 19234,
+        # 19388, 14734.  Caller passes artist_tokens, we find them in
+        # the middle of the slug and split the title off.
+        ('NTGT-three-gates',
+         'https://www.invaluable.com/auction-lot/the-three-gates-nguyen-gia-tri-1908-1993-41-x-36--101-c-c02447f8ee',
+         'The Three Gates', {'nguyen', 'gia', 'tri'}),
+        ('NGT-two-girls-title-first',
+         'https://www.invaluable.com/auction-lot/two-girls-nguyen-gia-tri-1908-1993-27-x-33-5-cm-i-100-c-6cf475a856',
+         'Two Girls', {'nguyen', 'gia', 'tri'}),
+        # Single-year '-by-' variant: '-by-<artist>-<single-year>' not
+        # always birth-death pair.  Pattern A regex must tolerate it.
+        ('NTN-year-of-ox-by-single-year',
+         'https://www.invaluable.com/auction-lot/the-year-of-the-ox-97-by-nguyen-tu-nghiem-1922-20-102-c-b744d9eaae',
+         'The Year of the Ox 97', None),
     ]
 
     def test_all_cases(self):
