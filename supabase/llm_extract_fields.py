@@ -69,7 +69,7 @@ def _pg_list(filt: str, limit_total=None):
 
 
 DIM_PARSE_RE = re.compile(
-    r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm",
+    r"(\d+(?:[.,]\d+)?)\s*(?:[x×]|by)\s*(\d+(?:[.,]\d+)?)\s*cm",
     re.IGNORECASE,
 )
 
