@@ -42,19 +42,26 @@ def _build_vn_slug_kws():
         return ()
     kws = set()
     for normalized in VN_ARTIST_CATALOG:
-        if not normalized or len(normalized) < 3:
+        if not normalized or len(normalized) < 5:
             continue
         # 'nguyen trong kiem' → 'nguyen-trong-kiem'
-        kws.add(normalized.replace(' ', '-'))
-        # Family-elision: French houses often drop the family name on the
-        # URL slug — 'trong-kiem' instead of 'nguyen-trong-kiem'.  Keep
-        # both so the substring filter catches both forms.
+        slug_full = normalized.replace(' ', '-')
+        if len(slug_full) >= 6:
+            kws.add(slug_full)
+        # Family-elision: French houses often drop the family name —
+        # 'trong-kiem' instead of 'nguyen-trong-kiem'.  Only emit when the
+        # eluded form is still ≥ 8 chars; shorter forms collide with
+        # non-VN names ('van-de' from 'tran van de' matches Van Der Rohe,
+        # 'the-son' matches 'the song', 'ke-an' matches 'snake-and-...').
+        # User audit on Everard 2026-06 surfaced these false positives.
         tokens = normalized.split()
         if len(tokens) >= 3:
-            kws.add('-'.join(tokens[1:]))
+            elided = '-'.join(tokens[1:])
+            if len(elided) >= 8:
+                kws.add(elided)
     # Variants outside the catalog normalisation.  'lebadang' is how
     # Lê Bá Đáng is slugified abroad; the catalog has 'le ba dang'.
-    kws.update(('lebadang', 'diem-phung', 'cao-dam-vu', 'dam-vu', 'mai-thu'))
+    kws.update(('lebadang', 'diem-phung', 'cao-dam-vu', 'mai-trung-thu'))
     return tuple(sorted(kws))
 
 VN_SLUG_KWS = _build_vn_slug_kws()
@@ -83,9 +90,16 @@ def list_vn_lots_in_catalog(cat_url):
     r = requests.get(cat_url, headers=H, timeout=25)
     r.raise_for_status()
     lots = set()
+    # Word-boundary match against slug tokens (not substring).  'le-pho'
+    # must not match 'after-lartigue-villerville-photo', 'le-lam' must
+    # not match 'metal-table-lamp'.  Token bounds: start, end, or hyphen.
+    kw_re = re.compile(
+        r'(?:^|-)(?:' + '|'.join(re.escape(k) for k in VN_SLUG_KWS) + r')(?:-|$)',
+        re.IGNORECASE,
+    ) if VN_SLUG_KWS else None
     for m in re.finditer(r'href="(/en/lot/\d+/(\d+)-([^"]+))"', r.text):
         path, _, slug = m.groups()
-        if any(kw in slug.lower() for kw in VN_SLUG_KWS):
+        if kw_re and kw_re.search(slug):
             lots.add((BASE + path, slug))
     return sorted(lots)
 

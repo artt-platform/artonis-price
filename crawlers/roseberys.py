@@ -37,13 +37,20 @@ def _build_vn_fragments():
         return ()
     frags = {"vietnam", "vietnamese"}
     for normalized in VN_ARTIST_CATALOG:
-        if normalized and len(normalized) >= 5:
-            frags.add(normalized)
-            tokens = normalized.split()
-            # Family-elision: 'trong kiem' (no 'nguyen')
-            if len(tokens) >= 3:
-                frags.add(' '.join(tokens[1:]))
-    # Slugified variants that catalog normalization doesn't cover
+        if not normalized or len(normalized) < 5:
+            continue
+        frags.add(normalized)
+        # Family-elision: 'trong kiem' (no 'nguyen').  Cap at ≥ 8 chars
+        # — anything shorter collides with non-VN substrings ('van de'
+        # matches Van der Rohe, 'the son' matches "the song", 'ke an'
+        # matches "snake and ...").  Audit on Everard 2026-06 surfaced
+        # these false positives.
+        tokens = normalized.split()
+        if len(tokens) >= 3:
+            elided = ' '.join(tokens[1:])
+            if len(elided) >= 8:
+                frags.add(elided)
+    # Slugified variants outside catalog normalisation
     frags.update(("lebadang", "le ba dang"))
     return tuple(sorted(frags))
 
@@ -152,9 +159,17 @@ def parse_sale_page(html):
         }
 
 
+# Word-boundary check — must match whole-word, not substring, so 'le pho'
+# doesn't match 'photo' and 'le lam' doesn't match 'metal lamp'.  Audit
+# on Everard 2026-06 surfaced these false positives across crawlers.
+_VN_FRAG_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(f) for f in _VN_FRAGMENTS) + r')\b',
+    re.IGNORECASE,
+) if _VN_FRAGMENTS else None
+
+
 def _looks_vn(text):
-    low = text.lower()
-    return any(frag in low for frag in _VN_FRAGMENTS)
+    return bool(_VN_FRAG_RE and _VN_FRAG_RE.search(text))
 
 
 def crawl(conn, sale_urls=None, delay=2.5, verbose=True, max_pages=400):
