@@ -350,6 +350,11 @@ def list_vn_past_catalogs(scraper=None, max_pages=25):
             all_cats.update(cats)
         except Exception:
             break
+    # Also include upcoming VN-themed ventes from /calendrier (slug-filtered).
+    try:
+        all_cats |= set(list_upcoming_catalogs(scraper, slug_filter=True))
+    except Exception:
+        pass
     return sorted(all_cats)
 
 
@@ -361,6 +366,24 @@ _VN_RELEVANT_SLUG_KEYWORDS = (
     "asian", "orientaliste", "tableaux-modernes", "tableaux-asiatiques",
     "moderne-asiatique", "ecole-des-beaux-arts", "centenaire", "tonkin",
 )
+
+
+def list_upcoming_catalogs(scraper=None, slug_filter=True):
+    """Discover UPCOMING Millon catalogs from /calendrier.  Without this,
+    the crawler only sees past sales — user-flagged miss: vente4442
+    'L'âme du Vietnam — Maîtres de la Modernité' (Sat 27 June 2026)
+    was scheduled but invisible to crawl_past_catalogs."""
+    scraper = scraper or _make_scraper()
+    try:
+        r = scraper.get("https://www.millon.com/calendrier", timeout=20)
+        if r.status_code != 200:
+            return []
+        cats = set(re.findall(r"/catalogue/(vente\d+-[a-z0-9\-]+)", r.text))
+    except Exception:
+        return []
+    if slug_filter:
+        cats = {c for c in cats if any(kw in c.lower() for kw in _VN_RELEVANT_SLUG_KEYWORDS)}
+    return sorted(cats)
 
 
 def list_all_past_catalogs(scraper=None, max_pages=80, year_min=2018, slug_filter=True):
@@ -389,6 +412,11 @@ def list_all_past_catalogs(scraper=None, max_pages=80, year_min=2018, slug_filte
             all_cats.update(cats)
         except Exception:
             break
+    # Always merge in /calendrier (upcoming sales) — single page, cheap.
+    try:
+        all_cats |= set(list_upcoming_catalogs(scraper, slug_filter=False))
+    except Exception:
+        pass
     # Filter by slug keywords (cheap pre-filter; per-lot artist whitelist applies later)
     if slug_filter:
         all_cats = {c for c in all_cats if any(kw in c.lower() for kw in _VN_RELEVANT_SLUG_KEYWORDS)}
