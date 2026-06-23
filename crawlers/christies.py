@@ -243,6 +243,26 @@ def extract_lots_from_page(url, verbose=False):
 
         lot_id = extract("object_id") or extract("lot_id_txt") or extract("id")
         title = extract("title_secondary_txt") or extract("title") or extract("lot_title")
+        # Christie's lot description carries 'Painted in 1923' / 'Executed
+        # 1965' / 'circa 1980' — used to populate `year` for ~98% of
+        # otherwise-missing-year lots when fetched per-lot.  The search-
+        # results JSON blob doesn't always include description, so we
+        # also probe extra fields here.
+        description = (
+            extract("description") or extract("lot_description") or
+            extract("long_description") or ""
+        )
+        year_blob = ""
+        if description:
+            m_yr_desc = re.search(
+                r"(?:Painted|Executed|Made|Created|Conceived|Dated|Drawn|Cast|Sculpted)"
+                r"\s+(?:in\s+)?(?:circa\s+|c\.\s+|around\s+|about\s+)?(\d{4})",
+                description, re.IGNORECASE,
+            )
+            if m_yr_desc:
+                y = int(m_yr_desc.group(1))
+                if 1850 <= y <= 2030:
+                    year_blob = m_yr_desc.group(1)
         # Sale info
         sale_id = extract("sale_number") or extract("sale_id") or extract("event_code")
         sale_date_raw = extract("start_date") or extract("sale_date") or extract("event_date") or extract("end_date")
@@ -337,7 +357,7 @@ def extract_lots_from_page(url, verbose=False):
             "artwork_title": title,
             "medium": "",
             "dimensions": dims,
-            "year": "",
+            "year": year_blob,
             "estimate_low": est_low,
             "estimate_high": est_high,
             "hammer_price": price,

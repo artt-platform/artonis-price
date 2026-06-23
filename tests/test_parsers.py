@@ -398,6 +398,63 @@ class TestMillonCatalogParsing(unittest.TestCase):
         self.assertIn('lot38-pham-hau-1903-1994-attribue', slugs)
 
 
+class TestChristiesYearExtraction(unittest.TestCase):
+    """Christie's lot description 'Painted in 1923' / 'Executed 1965' /
+    'circa 1980' should populate the `year` field.
+
+    Audit on 2026-06-23 found 56 Christie's-via-Invaluable lots with NULL
+    year (and 1 direct Christie's lot).  The direct-source parser now
+    pulls year from the description JSON field; Invaluable-routed lots
+    still need a re-fetch with Playwright (their search JSON doesn't
+    expose the description text).
+    """
+
+    YEAR_RE = re.compile(
+        r"(?:Painted|Executed|Made|Created|Conceived|Dated|Drawn|Cast|Sculpted)"
+        r"\s+(?:in\s+)?(?:circa\s+|c\.\s+|around\s+|about\s+)?(\d{4})",
+        re.IGNORECASE,
+    )
+
+    def _extract(self, desc):
+        m = self.YEAR_RE.search(desc)
+        if not m: return None
+        y = int(m.group(1))
+        return m.group(1) if 1850 <= y <= 2030 else None
+
+    def test_painted_in(self):
+        self.assertEqual(self._extract("Painted in 1923"), "1923")
+
+    def test_executed(self):
+        self.assertEqual(self._extract("Executed 1965"), "1965")
+
+    def test_circa(self):
+        self.assertEqual(self._extract("Painted circa 1980"), "1980")
+
+    def test_c_period(self):
+        self.assertEqual(self._extract("Executed c. 1955"), "1955")
+
+    def test_conceived(self):
+        self.assertEqual(self._extract("Conceived in 1947"), "1947")
+
+    def test_cast(self):
+        self.assertEqual(self._extract("Cast in 1962"), "1962")
+
+    def test_no_marker(self):
+        # Plain '1923' without 'Painted' / 'Executed' must NOT match,
+        # otherwise birth-death pairs leak into the year field.
+        self.assertIsNone(self._extract("(1903-1995)"))
+
+    def test_birth_death_pair_skipped(self):
+        self.assertIsNone(
+            self._extract("Le Pho (1907-2001) Maternité, oil on silk")
+        )
+
+    def test_implausible_year_rejected(self):
+        # Reject < 1850 or > 2030
+        self.assertIsNone(self._extract("Painted in 1750"))
+        self.assertIsNone(self._extract("Painted in 2090"))
+
+
 class TestSculptureClassification(unittest.TestCase):
     """Sculpture detection beyond the obvious 'sculpture' / 'bronze' keywords.
 
