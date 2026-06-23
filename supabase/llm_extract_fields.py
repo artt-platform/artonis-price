@@ -151,14 +151,26 @@ def _build_patch(parsed: dict, current: dict, refresh: bool):
             if new_w > 500 or new_h > 500:
                 cur_bad = False
             if refresh or cur_bad:
-                # Source order: many crawlers display "H × W" — but DB
-                # stores width_cm/height_cm.  LLM tends to repeat the
-                # source ordering.  Without source convention here, we
-                # store both raw; the legacy parser already normalised
-                # to W × H so we follow suit (a < b is W, a > b is H
-                # heuristic — same as the original parser).
-                w = min(new_w, new_h)
-                h = max(new_w, new_h)
+                # Source-specific orientation: most catalogs write H × W
+                # in the text (Bonhams, Sotheby's, Aguttes, Millon,
+                # Drouot, Gros-Delettrez, Tajan, Artcurial, Osenat,
+                # Invaluable).  Christie's, Phillips, Le Auction write
+                # W × H.  Without this convention we can't reliably
+                # distinguish portrait vs landscape from the dim text
+                # alone.  See artonis_price_mvp._HW_FIRST_SOURCES.
+                HW_FIRST = {
+                    "bonhams", "sothebys", "aguttes", "drouot",
+                    "gros-delettrez", "gros_delettrez", "tajan",
+                    "artcurial", "millon", "millon_vn", "osenat",
+                    "invaluable",
+                }
+                src = (current.get("source") or "").lower()
+                if src in HW_FIRST:
+                    # First number is H, second is W
+                    h, w = new_w, new_h
+                else:
+                    # W × H source (Christie's, Phillips, Le Auction)
+                    w, h = new_w, new_h
                 patch["width_cm"] = w
                 patch["height_cm"] = h
                 patch["area_m2"] = round(w * h / 10000, 4)
