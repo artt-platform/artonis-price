@@ -409,14 +409,14 @@ class TestChristiesYearExtraction(unittest.TestCase):
     expose the description text).
     """
 
-    YEAR_RE = re.compile(
-        r"(?:Painted|Executed|Made|Created|Conceived|Dated|Drawn|Cast|Sculpted)"
-        r"\s+(?:in\s+)?(?:circa\s+|c\.\s+|around\s+|about\s+)?(\d{4})",
-        re.IGNORECASE,
-    )
-
     def _extract(self, desc):
-        m = self.YEAR_RE.search(desc)
+        import re as _re
+        YEAR_RE = _re.compile(
+            r"(?:Painted|Executed|Made|Created|Conceived|Dated|Drawn|Cast|Sculpted)"
+            r"\s+(?:in\s+)?(?:circa\s+|c\.\s+|around\s+|about\s+)?(\d{4})",
+            _re.IGNORECASE,
+        )
+        m = YEAR_RE.search(desc)
         if not m: return None
         y = int(m.group(1))
         return m.group(1) if 1850 <= y <= 2030 else None
