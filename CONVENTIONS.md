@@ -102,6 +102,50 @@ Bonhams, Christie's, Drouot, Heritage, Larasati, Le Auction, Osenat,
 Phillips, Ravenel, Sotheby's, Tajan, Global Auction, Chons —
 automatically.  No per-crawler list to keep in sync.
 
+### VN-keyword discovery: 2-pass strict matching
+
+When a crawler matches lots by artist name (slug or text), use a 2-pass
+filter — not substring, not family-elision:
+
+**Pass 1 — strict full-name (≥ 6 chars):**
+
+```python
+PASS1_KWS = set()
+for normalized in VN_ARTIST_CATALOG:
+    if not normalized or len(normalized) < 5:
+        continue
+    slug = normalized.replace(' ', '-')
+    if len(slug) >= 6:
+        PASS1_KWS.add(slug)
+```
+
+Then match with **word-boundary regex**, never substring:
+
+```python
+re.search(r'(?:^|-)' + re.escape(kw) + r'(?:-|$)', slug.lower())  # slug tokens
+re.search(r'\b' + re.escape(kw) + r'\b', text.lower())             # free text
+```
+
+Substring matching produced 30+ false positives on Everard
+(`le-pho` matched `after-lartigue-villerville-photo`,
+`le-lam` matched `metal-table-lamp`, `van-de` matched Van der Rohe).
+
+**Pass 2 — `vietnamese` / `vietnam` literal:**
+
+```python
+PASS2_RE = re.compile(r'(?:^|-)(vietnamese?|viet-nam)(?:-|$)')
+```
+
+Catches anonymous lots ('Vietnamese ceramic vase') AND new artists not
+yet in catalog ('Đinh Hào Trương Hào Vietnamese b 1937 …').  Pass 2 hits
+without an artist match should be flagged for manual review, not
+inserted blind.
+
+**Skip attribution / copy markers before insert** — `after`, `attrib`,
+`attributed`, `d-apres`, `atelier`, `ecole-de`, `cercle-de`,
+`entourage-de`, `copy`, `reproduction`.  See
+`crawlers/bidwizard.py::_FAKE_MARKERS_RE`.
+
 ### Exception: Invaluable
 
 Invaluable's per-artist URL embeds an opaque 10-char hash ID

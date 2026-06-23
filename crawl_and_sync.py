@@ -68,6 +68,11 @@ ALL_CRAWLERS = [
     ('gros_delettrez', 'crawlers.gros_delettrez', 'gros-delettrez', 'crawl'),
     ('invaluable',     'crawlers.invaluable',     'invaluable',     'crawl_all'),
     ('global_auction', 'crawlers.global_auction', 'global-auction', 'crawl'),
+    # BidWizard / online-auctions platform — shared by several US regional
+    # houses.  Add a new (key, host, default_location) row in
+    # crawlers/bidwizard.py::HOUSES to enable another house here.
+    ('everard',        'crawlers.bidwizard',      'everard',        'crawl_everard'),
+    ('austin_auction', 'crawlers.bidwizard',      'austin_auction', 'crawl_austin'),
     # Chọn — site offline since 2021, manual via Wayback only (excluded from automated runs):
     # ('chons',          'crawlers.chons',          'chons',          'crawl'),
 ]
