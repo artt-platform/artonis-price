@@ -97,6 +97,26 @@ JSON object with these fields (use null when not present):
                                     // or "H. 29 cm × L. 40 cm"
                                     // EXCLUDE inch-only variants when
                                     // a cm version exists.
+  "estimate_low": number|null,     // low end of pre-sale estimate in
+                                    // the catalog currency, no comma
+                                    // separators.  e.g. 50000 for
+                                    // "Estimation: 50 000 € - 70 000 €".
+                                    // Patterns: "Estimation: X-Y €",
+                                    // "Estimate: \$X-\$Y", "Estimate:
+                                    // £X-£Y", "估價: HK\$X - HK\$Y".
+                                    // Use null when only a single value
+                                    // is shown (point estimate).
+  "estimate_high": number|null,    // high end of the estimate range.
+  "estimate_currency": string|null,// ISO code: USD, EUR, GBP, HKD,
+                                    // CHF, JPY, CNY, SGD, MYR, AUD, THB.
+  "hammer_price": number|null,     // realised hammer in catalog currency
+                                    // when explicitly stated:
+                                    //   "Adjugé: X €" (Millon)
+                                    //   "Sold for \$X"
+                                    //   "Realised: £X"
+                                    //   "成交價: HK\$X"
+                                    // Null when not shown publicly.
+  "hammer_currency": string|null,  // ISO code matching the hammer.
   "inscription": string|null,      // verso / mount / certificate text
   "provenance": string|null,       // ownership history line if present
   "title": string|null,            // artwork title if recoverable
@@ -123,6 +143,9 @@ RAW_DESCRIPTION: {description}
 Extract structured fields per the JSON schema.  Reply with JSON only."""
 
 
+_VALID_CURS = {"USD","EUR","GBP","HKD","CHF","JPY","CNY","SGD","MYR","AUD","THB"}
+
+
 def _validate(parsed: dict) -> dict:
     """Sanity-check LLM output; drop obvious hallucinations."""
     out = {}
@@ -142,6 +165,15 @@ def _validate(parsed: dict) -> dict:
             yi = int(m.group(1))
             if 1850 <= yi <= 2030:
                 out["year"] = m.group(1)
+    # Numeric price fields with currency code sanity
+    for k in ("estimate_low", "estimate_high", "hammer_price"):
+        v = parsed.get(k)
+        if isinstance(v, (int, float)) and v > 0 and v < 1e9:
+            out[k] = float(v)
+    for k in ("estimate_currency", "hammer_currency"):
+        v = parsed.get(k)
+        if isinstance(v, str) and v.strip().upper() in _VALID_CURS:
+            out[k] = v.strip().upper()
     # Language enum
     lang = parsed.get("language")
     if lang in ("fr", "en", "bilingual", "vi", "other"):

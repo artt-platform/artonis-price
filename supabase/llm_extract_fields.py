@@ -119,6 +119,36 @@ def _build_patch(parsed: dict, current: dict, refresh: bool):
     new_prov = (parsed.get("provenance") or "").strip()
     if new_prov and (refresh or not current.get("provenance")):
         patch["provenance"] = new_prov[:2000]
+    # estimate_low / estimate_high / currency — fill blanks.  LLM now
+    # extracts these from 'Estimation: X - Y €' and similar blocks.
+    el = parsed.get("estimate_low")
+    eh = parsed.get("estimate_high")
+    ecur = parsed.get("estimate_currency")
+    if el and eh and (refresh or current.get("estimate_low") is None):
+        patch["estimate_low"] = el
+        patch["estimate_high"] = eh
+        # Only set currency when none on the row yet
+        if ecur and not current.get("currency"):
+            patch["currency"] = ecur
+    # hammer_price — fill when missing.  When LLM gives one, also
+    # recompute price_usd + price_with_premium_usd if possible.
+    ham = parsed.get("hammer_price")
+    ham_cur = parsed.get("hammer_currency") or ecur
+    if ham and (refresh or current.get("hammer_price") is None):
+        FX = {"USD":1.0,"EUR":1.08,"GBP":1.27,"HKD":0.128,"CHF":1.13,
+              "JPY":0.0067,"CNY":0.137,"SGD":0.74,"MYR":0.22,"AUD":0.66,"THB":0.027}
+        patch["hammer_price"] = ham
+        cur_for_fx = ham_cur or current.get("currency") or "EUR"
+        fx = FX.get(cur_for_fx.upper() if isinstance(cur_for_fx,str) else "EUR", 1.0)
+        new_usd = round(ham * fx, 2)
+        new_premium = round(new_usd * 1.25, 2)
+        patch["price_usd"] = new_usd
+        patch["price_with_premium_usd"] = new_premium
+        if current.get("area_m2"):
+            patch["price_per_m2_usd"] = round(new_premium / current["area_m2"], 2)
+        # If status was estimate_only and we now have hammer, mark sold
+        if current.get("status") == "estimate_only":
+            patch["status"] = "sold"
     # artwork_title — only overwrite if clearly cleaner (current is dim mess)
     cur_title = (current.get("artwork_title") or "").strip()
     new_title = (parsed.get("title") or "").strip()
@@ -190,7 +220,8 @@ def run(source: str = None, limit: int = None, refresh: bool = False,
         verbose: bool = True):
     flt = ("catalog_description=not.is.null"
            "&select=id,source,artwork_title,medium,year,provenance,catalog_description,"
-           "width_cm,height_cm,price_usd,price_with_premium_usd")
+           "width_cm,height_cm,area_m2,price_usd,price_with_premium_usd,"
+           "estimate_low,estimate_high,hammer_price,currency,status")
     if source:
         flt = f"source=eq.{source}&" + flt
     if not refresh:
