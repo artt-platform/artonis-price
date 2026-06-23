@@ -2,3 +2,4 @@ requests>=2.31
 beautifulsoup4>=4.12
 cloudscraper>=1.2.71
 playwright>=1.40
+anthropic>=0.105
