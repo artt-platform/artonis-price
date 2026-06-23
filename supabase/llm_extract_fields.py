@@ -16,6 +16,7 @@ Run-time guards:
 """
 import argparse
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -67,6 +68,31 @@ def _pg_list(filt: str, limit_total=None):
     return rows
 
 
+DIM_PARSE_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm",
+    re.IGNORECASE,
+)
+
+
+def _parse_dims_text(text: str):
+    """Pull (w, h) from a dimensions_text string like '29 x 40 cm'.
+    Returns (None, None) when no match.  Both decimal-dot and decimal-
+    comma are accepted ('39,5 x 50 cm' → (39.5, 50.0))."""
+    if not text:
+        return None, None
+    m = DIM_PARSE_RE.search(text)
+    if not m:
+        return None, None
+    try:
+        a = float(m.group(1).replace(",", "."))
+        b = float(m.group(2).replace(",", "."))
+    except ValueError:
+        return None, None
+    if not (1 <= a <= 1000 and 1 <= b <= 1000):
+        return None, None
+    return a, b
+
+
 def _build_patch(parsed: dict, current: dict, refresh: bool):
     """Decide which DB columns to update from LLM output.
 
@@ -100,9 +126,50 @@ def _build_patch(parsed: dict, current: dict, refresh: bool):
                        or "dimensions" in cur_title.lower()
                        or "x" in cur_title and any(c.isdigit() for c in cur_title)
                        and len(cur_title) > 50):
-        # Avoid replacing a clean short title with a longer LLM guess
         if not cur_title or len(new_title) < 200:
             patch["artwork_title"] = new_title[:300]
+    # dimensions — overwrite when current values look wrong.  Millon's
+    # legacy parser stripped the decimal comma ("48,8" → "488"), so
+    # width_cm > 200 with no decimal AND LLM gives a sub-200 value is
+    # a strong signal the LLM is right.
+    cur_w = current.get("width_cm")
+    cur_h = current.get("height_cm")
+    dim_text = parsed.get("dimensions_text")
+    if dim_text:
+        new_w, new_h = _parse_dims_text(dim_text)
+        if new_w and new_h:
+            # Detect Millon's legacy comma-stripping bug: a value > 200
+            # with no decimal part is very likely "39,5" stored as 395.
+            # When EITHER current dim shows that pattern AND the LLM
+            # gives a coherent sub-200 alternative, overwrite.
+            def _looks_comma_stripped(v):
+                return v is not None and v > 200 and v == int(v)
+            cur_bad = (cur_w is None or cur_h is None
+                       or _looks_comma_stripped(cur_w)
+                       or _looks_comma_stripped(cur_h))
+            # Don't overwrite when LLM result implausibly large
+            if new_w > 500 or new_h > 500:
+                cur_bad = False
+            if refresh or cur_bad:
+                # Source order: many crawlers display "H × W" — but DB
+                # stores width_cm/height_cm.  LLM tends to repeat the
+                # source ordering.  Without source convention here, we
+                # store both raw; the legacy parser already normalised
+                # to W × H so we follow suit (a < b is W, a > b is H
+                # heuristic — same as the original parser).
+                w = min(new_w, new_h)
+                h = max(new_w, new_h)
+                patch["width_cm"] = w
+                patch["height_cm"] = h
+                patch["area_m2"] = round(w * h / 10000, 4)
+                # Pretty form for the dimensions string column
+                def _fmt(n):
+                    return f"{int(n)}" if abs(n - int(n)) < 0.01 else f"{n:.1f}"
+                patch["dimensions"] = f"{_fmt(w)} x {_fmt(h)} cm"
+                # If price already known, recompute $/m²
+                ppm_basis = current.get("price_with_premium_usd") or current.get("price_usd")
+                if ppm_basis:
+                    patch["price_per_m2_usd"] = round(ppm_basis / patch["area_m2"], 2)
     return patch
 
 
@@ -110,7 +177,8 @@ def run(source: str = None, limit: int = None, refresh: bool = False,
         delay: float = 0.5, dry_run: bool = False, max_cost: float = None,
         verbose: bool = True):
     flt = ("catalog_description=not.is.null"
-           "&select=id,source,artwork_title,medium,year,provenance,catalog_description")
+           "&select=id,source,artwork_title,medium,year,provenance,catalog_description,"
+           "width_cm,height_cm,price_usd,price_with_premium_usd")
     if source:
         flt = f"source=eq.{source}&" + flt
     if not refresh:

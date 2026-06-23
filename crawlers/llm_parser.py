@@ -73,12 +73,23 @@ JSON object with these fields (use null when not present):
                                     // otherwise English).
                                     // EXCLUDE: signature notes, dates,
                                     // inscriptions, dimensions.
-  "year": string|null,             // 4-digit creation year if stated.
-                                    // Look for "Painted in 1923",
-                                    // "Executed 1965", "circa 1980",
-                                    // "1965-1966" (use first year).
-                                    // EXCLUDE: artist birth/death years,
-                                    // sale year, provenance dates.
+  "year": string|null,             // 4-digit artwork CREATION year.
+                                    // INCLUDE only when EXPLICITLY stated
+                                    // about the artwork itself:
+                                    //   "Painted in 1923"
+                                    //   "Executed 1965"
+                                    //   "circa 1980"
+                                    //   "1965-1966" (use first year)
+                                    //   Title text like "Vue, 1965"
+                                    //   Description like "réalisée en 1965"
+                                    // EXCLUDE — return null when only:
+                                    //   - artist birth year ("sinh năm 1957",
+                                    //     "born 1957", "(1957-)", "(b. 1957)")
+                                    //   - artist death year
+                                    //   - "(1907-2001)" birth-death pair
+                                    //   - sale year / catalog year
+                                    //   - provenance dates ("acquired 1985")
+                                    // Default to null when uncertain.
   "signature_info": string|null,   // raw signature phrasing if present
                                     // e.g. "signé et daté nge 98
                                     // (en bas à droite)"
