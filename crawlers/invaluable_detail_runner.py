@@ -186,7 +186,13 @@ def build_payload(data, artist_lookup, artist_vocab, current_artist_id):
     if data.get('auction_house'):
         house = data['auction_house'][:50]
         p['sale_location'] = house
-        p['auction_title'] = f'{house} via Invaluable'[:200]
+        # Prefer the actual sale name from the 'Auction Details' accordion
+        # (e.g. 'Fine Chinese and Asian arts- Session One') over the
+        # 'X via Invaluable' fallback which just repeats the house.
+        if data.get('sale_name'):
+            p['auction_title'] = data['sale_name'][:200]
+        else:
+            p['auction_title'] = f'{house} via Invaluable'[:200]
 
     # === Currency + price (the v5 fix) ===
     if data.get('estimate_low') and data.get('estimate_high'):

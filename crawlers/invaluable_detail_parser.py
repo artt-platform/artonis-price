@@ -611,6 +611,31 @@ def parse_lot_page(page, url):
     except Exception:
         pass
 
+    # Sale name from the 'Auction Details' accordion.  Layout (per user
+    # screenshot for lot 19585):
+    #   Auction Details
+    #   {SALE_NAME}
+    #   by {HOUSE}
+    #   {DATE/TIME}
+    #   {ADDRESS}
+    # The accordion may be closed by default — the section text still
+    # renders in the DOM, just hidden.  Extract from body text.
+    try:
+        m_sale = re.search(
+            r'\nAuction Details\n([^\n]{5,200})\n(?:by\s+|\s*\n)',
+            body,
+        )
+        if m_sale:
+            sale_name = m_sale.group(1).strip().rstrip(',. ')
+            # Reject if it's a label/heading
+            if (5 < len(sale_name) < 200
+                    and sale_name.lower() not in ('explore this auction',
+                                                  'request more information',
+                                                  'auction details')):
+                out['sale_name'] = sale_name
+    except Exception:
+        pass
+
     # Final pass: drop trailing year / medium tokens from artwork_title,
     # and title-case ALL-CAPS catalog titles ('GRAY HOUSES, 1995 OIL' →
     # 'Gray Houses').  See _clean_artwork_title.
