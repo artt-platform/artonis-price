@@ -242,6 +242,21 @@ def parse_lot(doc):
             break
 
     # Medium: usually 1-2 lines before dimensions in catalogDesc
+    # Truncate medium at signature / inscription / date phrasing — those
+    # belong to the lot's authentication notes, not the material support.
+    # Bonhams Bilingual catalogs interleave 'gouache sur papier journal
+    # signed and dated nge 98 (lower left) gouache on newspaper' — we
+    # want just 'gouache sur papier journal'.
+    def _strip_signature_tail(s):
+        if not s: return s
+        m = re.search(
+            r"\s+(?:sign[eé]d?|sign[eé]e?|signature|inscribed|inscrit|"
+            r"annot[eé]|annotated|monogrammed|monogramm[eé]|stamped|"
+            r"estampill[eé]|dated|dat[eé]|titled|titr[eé])\b",
+            s, re.IGNORECASE,
+        )
+        return s[:m.start()].rstrip(" ,.-") if m else s
+
     medium = ""
     if catalog_desc_plain:
         # Look for English medium pattern: "[medium] NN x NN cm"
@@ -250,7 +265,7 @@ def parse_lot(doc):
             catalog_desc_plain, re.IGNORECASE
         )
         if m_med:
-            medium = clean_text(m_med.group(1))[:150]
+            medium = _strip_signature_tail(clean_text(m_med.group(1)))[:150]
         if not medium:
             # Try French: "huile sur toile", "laque", etc.
             m_med2 = re.search(
@@ -258,7 +273,7 @@ def parse_lot(doc):
                 catalog_desc_plain, re.IGNORECASE
             )
             if m_med2:
-                medium = clean_text(m_med2.group(1))[:150]
+                medium = _strip_signature_tail(clean_text(m_med2.group(1)))[:150]
         if not medium:
             # Sculpture-style: medium followed by single dimension "H: 50.5 cm" or "Height NN cm"
             m_sculp = re.search(
@@ -266,7 +281,7 @@ def parse_lot(doc):
                 catalog_desc_plain, re.IGNORECASE
             )
             if m_sculp:
-                medium = clean_text(m_sculp.group(1))[:150]
+                medium = _strip_signature_tail(clean_text(m_sculp.group(1)))[:150]
 
     # Price + currency
     price = doc.get("price") or {}

@@ -398,6 +398,60 @@ class TestMillonCatalogParsing(unittest.TestCase):
         self.assertIn('lot38-pham-hau-1903-1994-attribue', slugs)
 
 
+class TestBonhamsMediumCleanup(unittest.TestCase):
+    """Bonhams bilingual catalogs interleave medium with signature notes
+    in BOTH French and English, e.g. 'gouache sur papier journal signed
+    and dated nge 98 (lower left) gouache on newspaper'.
+
+    Medium parser should keep just 'gouache sur papier journal' — the
+    signature/inscription/date phrases belong elsewhere (or nowhere)."""
+
+    def _strip(self, s):
+        import re as _re
+        m = _re.search(
+            r"\s+(?:sign[eé]d?|sign[eé]e?|signature|inscribed|inscrit|"
+            r"annot[eé]|annotated|monogrammed|monogramm[eé]|stamped|"
+            r"estampill[eé]|dated|dat[eé]|titled|titr[eé])\b",
+            s, _re.IGNORECASE,
+        )
+        return s[:m.start()].rstrip(" ,.-") if m else s
+
+    def test_french_with_english_signature(self):
+        self.assertEqual(
+            self._strip("gouache sur papier journal signed and dated nge 98 (lower left) gouache on newspaper"),
+            "gouache sur papier journal",
+        )
+
+    def test_french_with_french_signature(self):
+        self.assertEqual(
+            self._strip("huile sur toile signé en bas à droite"),
+            "huile sur toile",
+        )
+
+    def test_english_with_signature(self):
+        self.assertEqual(
+            self._strip("oil on canvas signed lower right"),
+            "oil on canvas",
+        )
+
+    def test_inscribed_marker(self):
+        self.assertEqual(
+            self._strip("lacquer on wood inscribed on verso"),
+            "lacquer on wood",
+        )
+
+    def test_dated_marker(self):
+        self.assertEqual(
+            self._strip("ink on silk dated 1965"),
+            "ink on silk",
+        )
+
+    def test_clean_medium_passes_through(self):
+        # Medium with no signature phrase should not be truncated.
+        self.assertEqual(self._strip("oil on canvas"), "oil on canvas")
+        self.assertEqual(self._strip("gouache sur papier journal"), "gouache sur papier journal")
+
+
 class TestChristiesYearExtraction(unittest.TestCase):
     """Christie's lot description 'Painted in 1923' / 'Executed 1965' /
     'circa 1980' should populate the `year` field.
