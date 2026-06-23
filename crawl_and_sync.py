@@ -271,6 +271,24 @@ def main():
 
     conn.close()
 
+    # === LLM enrichment pass ===
+    # After all crawlers ran + synced to Supabase, fetch full catalog
+    # descriptions for the newly-inserted rows and run Haiku 4.5 over
+    # them to fill medium / year / signature_info / provenance.  Skip
+    # entirely when SKIP_SUPABASE (local-only run) or ANTHROPIC_API_KEY
+    # is unset.
+    if not SKIP_SUPABASE and os.environ.get('ANTHROPIC_API_KEY'):
+        try:
+            print(f"\n\n{'='*60}\nLLM enrichment pass\n{'='*60}")
+            # Backfill descriptions for any rows missing them
+            from supabase.backfill_catalog_descriptions import backfill
+            backfill(limit=200, delay=0.5, verbose=True)
+            # Run LLM extract — cap cost at $2 per cron run
+            from supabase.llm_extract_fields import run as llm_run
+            llm_run(limit=500, delay=0.2, max_cost=2.0, verbose=True)
+        except Exception as e:
+            print(f"  LLM enrichment skipped: {e}")
+
     # Summary
     print(f"\n\n{'='*60}\nSUMMARY\n{'='*60}")
     print(f"{'source':<18} {'new':>6} {'pushed':>8} {'time':>6}  status")
