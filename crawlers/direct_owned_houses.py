@@ -52,6 +52,8 @@ DIRECT_OWNED_HOUSE_NAMES = {
     "everard",
     "akiba galleries",
     "lawsons",
+    # Asia regional with direct crawler — verified ≥10 lots (50 inserted 2026-06-24)
+    "33 auction",
     # Newer direct crawlers — kept OFF until proven coverage:
     #   "shapiro", "shapiro auctions llc", "shapiro auctioneers"  (0 direct lots)
     #   "dawsons", "dawsons auctioneers"                          (0 direct lots)
