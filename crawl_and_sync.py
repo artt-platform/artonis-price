@@ -75,6 +75,7 @@ ALL_CRAWLERS = [
     ('lawsons',        'crawlers.auction_catalog_platform', 'lawsons',         'crawl_lawsons'),
     ('john_moran',     'crawlers.auction_catalog_platform', 'john_moran',      'crawl_moran'),
     ('shapiro',        'crawlers.auction_catalog_platform', 'shapiro',         'crawl_shapiro'),
+    ('auction_33',     'crawlers.auction_catalog_platform', 'auction_33',      'crawl_33auction'),
     ('invaluable',     'crawlers.invaluable',     'invaluable',     'crawl_all'),
     ('global_auction', 'crawlers.global_auction', 'global-auction', 'crawl'),
     # BidWizard / online-auctions platform — shared by several US regional

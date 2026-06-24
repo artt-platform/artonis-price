@@ -48,6 +48,11 @@ HOUSES = {
     "lawsons":         ("Lawsons",           "https://www.lawsons.com.au",       "Sydney, Australia", "AUD"),
     "john_moran":      ("John Moran",        "https://www.johnmoran.com",        "Los Angeles, USA",  "USD"),
     "shapiro":         ("Shapiro Auctions",  "https://www.shapiroauctions.com",  "New York, USA",     "USD"),
+    # Added 2026-06-24: 33 Auction (Singapore + Jakarta) — strong VN
+    # coverage.  Same WP + Invaluable plugin pattern as Joshua/Akiba.
+    # Search returned 60 candidate VN lots vs 12 via Invaluable mirror
+    # — huge gap to close (SPEC §14.1 audit).
+    "auction_33":      ("33 Auction",        "https://www.33auction.com",        "Singapore",         "SGD"),
 }
 
 UA = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/'
@@ -418,3 +423,4 @@ def crawl_akiba(conn, **kw):   return crawl_house(conn, "akiba_galleries", **kw)
 def crawl_lawsons(conn, **kw): return crawl_house(conn, "lawsons", **kw)
 def crawl_moran(conn, **kw):   return crawl_house(conn, "john_moran", **kw)
 def crawl_shapiro(conn, **kw): return crawl_house(conn, "shapiro", **kw)
+def crawl_33auction(conn, **kw): return crawl_house(conn, "auction_33", **kw)
