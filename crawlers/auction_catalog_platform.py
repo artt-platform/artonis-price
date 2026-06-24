@@ -62,14 +62,21 @@ _FAKE_MARKERS_RE = re.compile(
 )
 
 
-def _load_vn_kws():
+def _load_vn_catalog():
+    """Return the VN catalog as a set of normalized names (single source
+    of truth from data/vn_artist_catalog.py)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
     for m in list(sys.modules.keys()):
         if "vn_artist_catalog" in m:
             del sys.modules[m]
     from vn_artist_catalog import VN_ARTIST_CATALOG
+    return set(VN_ARTIST_CATALOG)
+
+
+def _load_vn_kws():
+    """Catalog names slugified, for URL pattern pre-filtering."""
     kws = set()
-    for normalized in VN_ARTIST_CATALOG:
+    for normalized in _load_vn_catalog():
         if not normalized or len(normalized) < 5:
             continue
         slug = normalized.replace(" ", "-")
@@ -78,6 +85,54 @@ def _load_vn_kws():
     kws.update(("lebadang", "le-thiet-cuong", "viet-dung-hong",
                 "than-binh-nguyen", "nguyen-tu-nghiem", "hoi-lebadang"))
     return kws
+
+
+import re as _re
+
+
+def _normalize_artist(name: str) -> str:
+    """Match upsert_artist's normalize_key — lowercase, accents stripped,
+    alphanumeric-only, space-separated."""
+    import unicodedata
+    if not name:
+        return ""
+    s = unicodedata.normalize('NFD', name)
+    s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
+    s = _re.sub(r"[^a-z0-9 ]+", " ", s.lower())
+    return _re.sub(r"\s+", " ", s).strip()
+
+
+def _match_catalog_artist(raw_name: str, catalog: set) -> str | None:
+    """Return the canonical normalized name from catalog if raw_name maps,
+    else None.  Tries: direct match, word-sorted match, common VN
+    Western-order reversal."""
+    if not raw_name:
+        return None
+    norm = _normalize_artist(raw_name)
+    # Strip parenthetical bio that the catalog page leaks into name
+    norm = _re.sub(r"\s+(?:vietnamese?|vietnam|french|chinese|american|british).*$", "", norm)
+    norm = _re.sub(r"\s+b\s+\d{4}.*$", "", norm)  # 'b 1907 2001' tail
+    norm = norm.strip()
+    if not norm or len(norm) < 4:
+        return None
+    if norm in catalog:
+        return norm
+    # Word-sort match — handles 'Viet Dung Hong' ↔ 'Hong Viet Dung'
+    sorted_norm = " ".join(sorted(norm.split()))
+    for cand in catalog:
+        if " ".join(sorted(cand.split())) == sorted_norm:
+            return cand
+    # Whole-word substring (mononym match) — 'Hoi Lebadang' contains
+    # catalog 'lebadang'.  Minimum 6 chars + whole-word boundary to
+    # avoid 'le' matching everything.
+    norm_words = norm.split()
+    norm_padded = " " + norm + " "
+    for cand in catalog:
+        if len(cand) < 6:
+            continue
+        if (" " + cand + " ") in norm_padded:
+            return cand
+    return None
 
 
 def _parse_lot_page(page, url, currency, host_label, host_location):
@@ -185,8 +240,20 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
             artist = artist_part
 
     if not artist:
-        # Skip anonymous folk-art lots — no artist match would mean orphan row
+        # Skip anonymous folk-art lots — no artist extracted
         return None
+
+    # STRICT catalog gate: artist must match VN_ARTIST_CATALOG.  Without
+    # this, regex parses 'Pair of Vintage Vietnamese Ceramic Elephants'
+    # → artist = 'Pair of'.  Lesson from Lawsons/Akiba contamination:
+    # never trust regex extraction for artist identity; always validate.
+    catalog = _load_vn_catalog()
+    canonical = _match_catalog_artist(artist, catalog)
+    if not canonical:
+        return None
+    # Promote the raw name to the canonical catalog spelling so
+    # upsert_artist hits the right row.
+    artist = canonical.title()
 
     # Sale name from URL parent-catalog reference (in body text)
     sale_name = host_label
