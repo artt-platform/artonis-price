@@ -66,6 +66,7 @@ ALL_CRAWLERS = [
     ('millon_past',    'crawlers.millon',         'millon',         'crawl_past_broad'),
     ('millon_vn',      'crawlers.millon_vn',      'millon',         'crawl'),
     ('gros_delettrez', 'crawlers.gros_delettrez', 'gros-delettrez', 'crawl'),
+    ('dawsons',        'crawlers.dawsons',        'dawsons',        'crawl'),
     ('invaluable',     'crawlers.invaluable',     'invaluable',     'crawl_all'),
     ('global_auction', 'crawlers.global_auction', 'global-auction', 'crawl'),
     # BidWizard / online-auctions platform — shared by several US regional
