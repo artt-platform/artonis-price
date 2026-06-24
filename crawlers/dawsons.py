@@ -77,6 +77,35 @@ def _build_keywords(catalog):
 
 
 _PASS2_RE = re.compile(r"(?:^|-)(vietnamese?|vietnam-war)(?:-|$)")
+
+# UK catalogs reverse VN names ('Nguyễn Thanh Bình' → 'Than Binh Nguyen').
+# When the LAST word of a 3-part name matches a common VN family name,
+# rotate it to the front so upsert_artist's normalised_name lookup hits
+# the canonical row.  Without this, Dawsons + Bonhams create orphan
+# artists ('Than Binh Nguyen' vs 'Nguyễn Thanh Bình' = different
+# normalized strings).
+_VN_FAMILY_NAMES = {
+    'nguyen', 'tran', 'le', 'pham', 'vu', 'bui', 'dao', 'ho', 'hoang',
+    'huynh', 'phan', 'doan', 'lam', 'truong', 'duong', 'dinh', 'mai',
+    'tang', 'thai', 'cao', 'dang', 'hong', 'ly', 'duong',
+}
+
+
+def _canonicalise_vn_name(name: str) -> str:
+    """If `name` looks Western-ordered with VN family name last, reverse it.
+    'Than Binh Nguyen' → 'Nguyen Than Binh'.  No-op for non-VN-looking names.
+    Note: doesn't fix typos ('Than' missing 'h' for 'Thanh') — those need
+    explicit aliases.
+    """
+    if not name: return name
+    parts = name.strip().split()
+    if len(parts) < 2 or len(parts) > 4:
+        return name
+    last_lower = parts[-1].lower().rstrip('.,;')
+    if last_lower in _VN_FAMILY_NAMES:
+        # Rotate last → first
+        return parts[-1] + ' ' + ' '.join(parts[:-1])
+    return name
 _FAKE_MARKERS_RE = re.compile(
     r"(?:^|-)(?:after|attrib|attributed|circle-of|workshop-of|"
     r"manner-of|follower-of|school-of|copy)(?:-|$)"
@@ -226,6 +255,13 @@ def parse_lot_detail(text, slug, lot_id, au, verbose=False):
     # Fall back: use raw_title prefix
     if not artwork_title:
         artwork_title = raw_title[:200]
+    # Reverse Western-ordered VN names so upsert_artist hits the canonical row.
+    artist_name = _canonicalise_vn_name(artist_name)
+    # Drop trailing 'Vietnamese' / 'Vietnam' that the catalog leaks into name.
+    artist_name = re.sub(r'\s+(Vietnamese?|Vietnam)\b.*$', '', artist_name).strip()
+    # Title-case the title (Dawsons sometimes lowercases mid-description fragments).
+    if artwork_title and artwork_title == artwork_title.lower():
+        artwork_title = ' '.join(w.capitalize() if not w[0].isupper() else w for w in artwork_title.split())
 
     # Medium + dimensions from description
     dim_m = _DIM_RE.search(desc)
