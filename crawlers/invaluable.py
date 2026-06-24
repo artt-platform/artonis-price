@@ -5,6 +5,7 @@ import time
 from urllib.parse import urljoin
 
 from crawlers.common import parse_amount, parse_date, insert_sale_result, clean_text, log_crawl_run
+from crawlers.direct_owned_houses import is_direct_owned
 
 BASE = "https://www.invaluable.com"
 
@@ -216,6 +217,13 @@ def crawl_artist(page, slug, canonical_name, timeout=40000):
             "USD": "New York", "HKD": "Hong Kong", "GBP": "London",
             "EUR": "Paris", "SGD": "Singapore", "CHF": "Zürich",
         }.get(cur, "")
+        # Skip when the upstream house has its own direct crawler — we
+        # don't want Invaluable duplicating Bonhams/Christie's/Aguttes/
+        # Austin/etc. lots that the direct crawler already covers more
+        # accurately (real hammer vs Invaluable's mid-estimate proxy).
+        # See crawlers/direct_owned_houses.py for the full list.
+        if is_direct_owned(parsed.get("auction_house", "")):
+            continue
         rec = {
             "source": "invaluable",
             "source_url": urljoin(BASE, card["href"]),
