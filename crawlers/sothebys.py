@@ -488,6 +488,13 @@ def _apollo_extract_lot(lot_url, sale_url, sale_meta_fallback, sale_date_fallbac
     desc = _strip_html(lot.get("description") or "")
     prov = _strip_html(lot.get("provenance") or "")
 
+    # All extraction goes through shared utilities so the same code path
+    # serves every crawler (lesson from the 3-times-fixed lot 12825 dim).
+    from crawlers.parsers import parse_dim, extract_medium, strip_bilingual
+    width_cm, height_cm, area_m2, dims = parse_dim(desc, source="sothebys")
+    medium = extract_medium(desc)
+    prov = strip_bilingual(prov)
+
     bid_ask_f = float(bid_ask)
     price_usd = bid_ask_f * FX_TO_USD.get(currency, 1.0)
 
@@ -500,8 +507,11 @@ def _apollo_extract_lot(lot_url, sale_url, sale_meta_fallback, sale_date_fallbac
         "sale_location": location[:100],
         "artist_name_raw": artist[:200],
         "artwork_title": artwork[:300],
-        "medium": "",
-        "dimensions": "",
+        "medium": medium,
+        "dimensions": dims,
+        "width_cm": width_cm,
+        "height_cm": height_cm,
+        "area_m2": area_m2,
         "year": "",
         "estimate_low": float(est_low) if est_low else None,
         "estimate_high": float(est_high) if est_high else None,
@@ -514,5 +524,6 @@ def _apollo_extract_lot(lot_url, sale_url, sale_meta_fallback, sale_date_fallbac
         "kind": "painting",
         "provenance": prov[:2000],
         "raw_snapshot": (f"{artist} | {artwork[:80]} | {desc[:120]}")[:300],
+        "catalog_description": desc[:2000],
     }
     return total_inserted
