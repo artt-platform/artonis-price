@@ -113,17 +113,22 @@ def _fetch_lot_details(scraper, lot_url):
                 if m_b:
                     birth_year = int(m_b.group(1))
 
-        # Medium + dimensions from meta description
+        # Medium + dimensions from meta description.
         meta = soup.find("meta", {"name": "description"})
         desc = meta.get("content", "") if meta else ""
-        m_dim = re.search(r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm", desc, re.IGNORECASE)
-        dims = f"{m_dim.group(1).replace(',','.')} x {m_dim.group(2).replace(',','.')} cm" if m_dim else ""
-        # Medium: first phrase after "Lot N - " up to "Signé" / dimensions
-        medium = ""
-        m_med = re.search(r"Lot\s+\d+\s*[-–]\s*([^0-9]+?)(?:\s+Sign[eé]|\s+\d+[.,]?\d*\s*[x×]|\s+\()",
-                          desc, re.IGNORECASE)
-        if m_med:
-            medium = clean_text(m_med.group(1))[:150]
+        # Use shared parsers (SPEC §10).  Millon = HW_FIRST convention.
+        from crawlers.parsers import parse_dim, extract_medium
+        width_cm, height_cm, area_m2, dims = parse_dim(desc, source="millon")
+        medium = extract_medium(desc)
+        # Millon-specific FR fallback when shared list misses
+        # (catches phrases that aren't in the canonical medium list).
+        if not medium:
+            m_med = re.search(
+                r"Lot\s+\d+\s*[-–]\s*([^0-9]+?)(?:\s+Sign[eé]|\s+\d+[.,]?\d*\s*[x×]|\s+\()",
+                desc, re.IGNORECASE,
+            )
+            if m_med:
+                medium = clean_text(m_med.group(1))[:150]
 
         # Hammer + estimate from the catalog detail markup.  Some lots
         # only have an estimate (unsold or pre-sale).
@@ -135,6 +140,9 @@ def _fetch_lot_details(scraper, lot_url):
             "year": title_year,
             "medium": medium,
             "dimensions": dims,
+            "width_cm": width_cm,
+            "height_cm": height_cm,
+            "area_m2": area_m2,
             "birth_year": birth_year,
             "death_year": death_year,
             "meta_desc": desc,
@@ -599,6 +607,10 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
                 "artwork_title": title,
                 "medium": details.get("medium", ""),
                 "dimensions": details.get("dimensions", ""),
+                "width_cm": details.get("width_cm"),
+                "height_cm": details.get("height_cm"),
+                "area_m2": details.get("area_m2"),
+                "catalog_description": (details.get("meta_desc") or "")[:2000],
                 "year": details.get("year", ""),
                 "estimate_low": details.get("estimate_low_eur"),
                 "estimate_high": details.get("estimate_high_eur"),
