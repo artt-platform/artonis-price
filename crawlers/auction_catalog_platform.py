@@ -166,6 +166,28 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
         lot_no_m = re.match(r'^Lot\s+(\d+)', title, re.IGNORECASE)
         if lot_no_m: lot_no = lot_no_m.group(1)
         title = m_lot.group(1).strip()
+    # Strip artist bio prefix.  Common patterns in WP/Invaluable-
+    # mirrored sites:
+    #   1. ARTIST (NATIONALITY, DATES) ACTUAL_TITLE
+    #   2. ARTIST (DATES, NATIONALITY) ACTUAL_TITLE  (Akiba uses this)
+    #   3. ARTIST NATIONALITY, DATES (no parens — bio-only)
+    title = re.sub(
+        r"^[A-Z][A-Za-z .'\-]+?\s*\((?:French[-\s]+)?Vietnamese?(?:[-\s]+French)?,?\s*"
+        r"(?:b\.?\s*)?\d{4}(?:\s*[-–]\s*\d{4})?\)\s*",
+        "", title,
+    )
+    title = re.sub(
+        r"^[A-Z][A-Za-z .'\-]+?\s*\(\s*(?:b\.?\s*)?\d{4}(?:\s*[-–]\s*\d{4})?,?\s*"
+        r"(?:French[-\s]+)?Vietnamese?(?:[-\s]+French)?\s*\)\s*",
+        "", title,
+    )
+    title = re.sub(
+        r"^[A-Z][A-Za-z .'\-]+\s+(?:French[-\s]+)?Vietnamese?(?:[-\s]+French)?,?\s+"
+        r"(?:b\.?\s*)?\d{4}(?:\s*[-–]\s*\d{4})?",
+        "", title,
+    ).strip()
+    if len(title) < 3:
+        title = ""
 
     # Estimate
     est_low = est_high = None
@@ -202,26 +224,23 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
     if m_desc:
         description = m_desc.group(1).strip()[:2000]
 
-    # Dimensions from description
-    dims = ""
-    m_dim = re.search(
-        r'(\d+(?:\.\d+)?)\s*(?:cm\s*)?(?:x|by|×)\s*(\d+(?:\.\d+)?)\s*cm',
-        description or body, re.IGNORECASE,
-    )
-    if m_dim:
-        dims = f"{m_dim.group(1)} x {m_dim.group(2)} cm"
-
-    # Medium keyword scan in description or title
-    medium = ""
-    haystack = (description + " " + title).lower()
-    for kw in ("oil on canvas", "oil on board", "oil on panel",
-               "watercolour on paper", "watercolor on paper",
-               "ink on paper", "lacquer on wood", "lithograph",
-               "etching", "screenprint", "gouache", "acrylic",
-               "mixed media"):
-        if kw in haystack:
-            medium = kw
-            break
+    # Dim + medium via shared parsers (SPEC §10).
+    from crawlers.parsers import parse_dim, extract_medium
+    width_cm, height_cm, area_m2, dims = parse_dim(description or body, source="invaluable")
+    haystack = (description or "") + " " + (title or "")
+    medium = extract_medium(haystack)
+    # Local fallback list for medium phrases not in the shared list
+    # (silkscreen variants, embossed lithograph, watercolor on paper).
+    if not medium:
+        for kw in ("oil on canvas", "oil on board", "oil on panel",
+                   "watercolour on paper", "watercolor on paper",
+                   "ink on paper", "lacquer on wood", "lithograph",
+                   "etching", "screenprint", "silkscreen", "gouache",
+                   "acrylic", "mixed media", "embossed lithograph",
+                   "watercolor on paper painting"):
+            if kw in haystack.lower():
+                medium = kw
+                break
 
     # Artist — extract from title or h1.  Title patterns:
     #   "Tran Luu Hau Vietnamese, 1928-2020"      → artist = "Tran Luu Hau"
