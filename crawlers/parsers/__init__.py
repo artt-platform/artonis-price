@@ -15,14 +15,14 @@ Modules:
   provenance.py  — strip_bilingual(prov) → str
   artist_match.py — match_to_catalog(name) → canonical name | None
 """
-from .dim import parse_dim, HW_FIRST_SOURCES
+from .dim import parse_dim, parse_dim_labelled, parse_dim_smart, HW_FIRST_SOURCES
 from .medium import extract_medium
 from .provenance import strip_bilingual
 from .artist_match import match_to_catalog, load_catalog
 from .fake_markers import is_attribution
 
 __all__ = [
-    'parse_dim', 'HW_FIRST_SOURCES',
+    'parse_dim', 'parse_dim_labelled', 'parse_dim_smart', 'HW_FIRST_SOURCES',
     'extract_medium',
     'strip_bilingual',
     'match_to_catalog', 'load_catalog',

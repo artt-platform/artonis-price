@@ -403,7 +403,25 @@ def _parse_medium(description):
 
 def _parse_dimensions(description):
     """Prefer cm dimensions. If only inch dims are present (e.g. 18 x 13 inches),
-    convert to cm so downstream price/m² is consistent across houses."""
+    convert to cm so downstream price/m² is consistent across houses.
+
+    Drouot is HW_FIRST_SOURCES in artonis_price_mvp.parse_dimensions, so
+    the stored 'A x B cm' is interpreted as 'H x W cm' downstream.  Keep
+    that convention when emitting labelled-format results — labelled
+    formats encode W and H explicitly, so we re-order to 'H x W' here
+    before storing.
+    """
+    # First try labelled formats — French Hauteur/Largeur, HW inch labels,
+    # height/wide.  Drouot French lots use 'H. 60 cm - L. 100,5 cm' which
+    # the plain _DIM_RE used to miss entirely.
+    from crawlers.parsers import parse_dim_labelled
+    w_lab, h_lab, _area, _disp = parse_dim_labelled(description)
+    if w_lab is not None:
+        # Re-emit as 'H x W cm' so downstream HW_FIRST interpretation
+        # extracts back the correct (W, H) tuple.
+        return f"{h_lab:g} x {w_lab:g} cm"
+
+    # Plain 'N x N cm' — original logic preserved.
     m = _DIM_RE.search(description)
     if m:
         return f"{m.group(1).replace(',', '.')} x {m.group(2).replace(',', '.')} cm"

@@ -17,6 +17,8 @@ import re
 import sys
 from playwright.sync_api import sync_playwright
 
+from crawlers.parsers import parse_dim_smart
+
 
 def _h1_to_title_year(h1, artist_name):
     """Extract clean title + year from H1 like 'Lot 58: DANG XUAN HOA : Objects in My House, 1995'."""
@@ -93,44 +95,11 @@ def _h1_to_title_year(h1, artist_name):
     return text, year
 
 
-_FRAC_NUM = r'\d+(?:\s+\d+/\d+)?(?:[.,]\d+)?'
-# Generic 'W [unit] [x|by] H [unit]'.  Allow optional unit between the two
-# numbers ('100cm x 100cm'), allow 'by' as a separator, and accept the
-# digit-comma-digit French decimal ('100,5').
-_DIM_RE = re.compile(
-    rf'({_FRAC_NUM})\s*(?:cm|inches?|in|["″])?\s*'
-    rf'(?:[xX×]|\bby\b)\s*'
-    rf'({_FRAC_NUM})\s*(cm|inches?|in|"|″)(?:\s|$|[,.;])',
-    re.IGNORECASE,
-)
-
-# Inch-with-H/W-suffix style: '48"h, 96"w' or '48 h x 96 w' — Cadmore /
-# Litchfield use this.  Captures (h_inches, w_inches).
-_HW_INCH_RE = re.compile(
-    rf'({_FRAC_NUM})\s*["″]?\s*h\b[\s,]+'
-    rf'({_FRAC_NUM})\s*["″]?\s*w\b',
-    re.IGNORECASE,
-)
-
-# French Hauteur/Largeur labels.  Catalog variants we've hit:
-#   'H. 60 cm - L. 100,5 cm'         (Pham Hau lot 19270)
-#   'Dimensions à vue : H. 47 x L. 67,8 cm'  (Osenat lot 4557)
-#   'H 60 x L 100.5'
-# Separator between cm-and-L is any whitespace, dash, comma, or 'x'.
-_HL_CM_RE = re.compile(
-    rf'\bh(?:auteur)?\.?\s*({_FRAC_NUM})\s*(?:cm)?[\s\-–,xX×]+'
-    rf'l(?:argeur)?\.?\s*({_FRAC_NUM})\s*cm',
-    re.IGNORECASE,
-)
-
-# 'Nh high, Nw wide' / 'N high N wide' — Invaluable lacquer panel lots
-# (BHH 'Overall Size - 198cm high, 250cm wide').  Captures
-# (height_value, width_value, unit).
-_HEIGHT_WIDE_RE = re.compile(
-    rf'({_FRAC_NUM})\s*(cm|in|inches?|["″])\s*high[\s,]+'
-    rf'({_FRAC_NUM})\s*(?:cm|in|inches?|["″])?\s*wide',
-    re.IGNORECASE,
-)
+# Dimension parsing moved to crawlers.parsers.dim — _parse_dims_text()
+# now delegates to parse_dim_smart() which handles every labelled format
+# (Cadmore/Litchfield inch H/W, French Hauteur/Largeur, BHH high/wide)
+# plus the generic 'N x N' fallback.  Direct crawlers also get to use
+# the same labelled-format paths via parse_dim_smart() going forward.
 
 
 # Medium keywords that catalog 'title' fields often append.  Order
@@ -331,63 +300,20 @@ def _parse_num(s):
 def _parse_dims_text(text):
     """Find first dim pattern, return (w_cm, h_cm, raw_match) or None.
 
-    Tries in order:
-      1. H-then-W inch labels:    '48"h, 96"w'          (Cadmore / Litchfield)
-      2. French Hauteur/Largeur:  'H. 60 cm - L. 100,5 cm'   (Pham Hau lots)
-      3. Generic '<N> [x|by] <N> cm/in/"' pattern       (everyone else)
+    Delegates to shared crawlers.parsers.parse_dim_smart() which handles
+    all the labelled formats (H/W inch, French Hauteur/Largeur,
+    high/wide) plus the generic 'N x N cm/in' fallback in priority
+    order.  Source key 'invaluable' applies HW_FIRST convention only to
+    the generic fallback — labelled patterns always self-disambiguate.
+
+    The trailing element of the tuple is the matched display string
+    rather than the original regex match — callers only used it for
+    raw_dim storage.
     """
-    # 1) H/W inch labels — explicit, returns (w_cm, h_cm) with H/W order known
-    m = _HW_INCH_RE.search(text or '')
-    if m:
-        try:
-            h_in = _parse_num(m.group(1))
-            w_in = _parse_num(m.group(2))
-        except ValueError:
-            pass
-        else:
-            return round(w_in * 2.54, 2), round(h_in * 2.54, 2), m.group(0)
-
-    # 2) French H./L. cm labels — H = hauteur (height), L = largeur (width)
-    m = _HL_CM_RE.search(text or '')
-    if m:
-        try:
-            h_cm = _parse_num(m.group(1))
-            w_cm = _parse_num(m.group(2))
-        except ValueError:
-            pass
-        else:
-            return round(w_cm, 2), round(h_cm, 2), m.group(0)
-
-    # 2b) 'Nh high, Nw wide' — Invaluable lacquer panels (BHH).  Unit may
-    # be cm or inches; both numbers carry the same unit.
-    m = _HEIGHT_WIDE_RE.search(text or '')
-    if m:
-        try:
-            h_val = _parse_num(m.group(1))
-            w_val = _parse_num(m.group(3))
-            unit = m.group(2).lower()
-            if unit.startswith('in') or unit == '"' or unit == '″':
-                h_val *= 2.54
-                w_val *= 2.54
-        except ValueError:
-            pass
-        else:
-            return round(w_val, 2), round(h_val, 2), m.group(0)
-
-    # 3) Generic '<N> [x|by] <N>' with cm/in unit
-    m = _DIM_RE.search(text or '')
-    if not m:
+    w, h, _area, disp = parse_dim_smart(text or '', source='invaluable')
+    if w is None:
         return None
-    try:
-        w = _parse_num(m.group(1))
-        h = _parse_num(m.group(2))
-    except ValueError:
-        return None
-    unit = m.group(3).lower()
-    if unit.startswith('in') or unit == '"':
-        w *= 2.54
-        h *= 2.54
-    return round(w, 2), round(h, 2), m.group(0)
+    return w, h, disp
 
 
 def _section_value(body, label, stop_labels):
