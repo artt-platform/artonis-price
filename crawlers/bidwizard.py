@@ -21,11 +21,13 @@ Discovery filter — strict 2-pass:
 """
 import re
 import time
+import html
 import sys
 from pathlib import Path
 import requests
 
 from crawlers.common import insert_sale_result, log_crawl_run
+from crawlers.parsers import extract_medium
 
 
 # House → (label, host, default sale_location) — append a new entry to
@@ -152,6 +154,84 @@ def list_lot_slugs(host, house_slug, catalog_slug, max_pages=25):
     return slugs, cat_url
 
 
+# Strip 'ARTIST (Vietnamese[, b. YEAR]), TITLE' / 'ARTIST, (Vietnamese)
+# TITLE, ...' prefix from H1.  Bidwizard sites encode the artist name in
+# the H1; the catalog 'artwork title' should be what comes AFTER the
+# (Vietnamese) nationality marker.
+#
+# Patterns seen in the wild (Everard / Austin Auction):
+#   'Le Thiet Cuong (Vietnamese), Man with Crab and Bird'    → 'Man with Crab and Bird'
+#   'Le Thiet Cuong, (Vietnamese) Untitled, Lacquer'         → 'Untitled, Lacquer'
+#   'Le Pho (French/Vietnamese, 1907-2001), Title'           → 'Title'
+#   'THANH CHUONG (B.1949) VIETNAMESE LACQUER PAINTING ...'  → 'Lacquer Painting ...'
+_ARTIST_PREFIX_RE = re.compile(
+    r"^[A-Z][A-Za-z .'\-]+?"          # ARTIST NAME (capital first)
+    r"\s*,?\s*"                       # optional comma + space
+    r"\(\s*(?:french[/\s]+)?vietnam(?:ese)?"  # (Vietnamese / French/Vietnamese
+    r"(?:\s*,\s*(?:b\.?\s*)?\d{4}(?:\s*[-–]\s*\d{4})?)?"  # optional ', b. 1962' or ', 1907-2001'
+    r"\s*\)\s*,?\s*",                 # close-paren + optional comma + space
+    re.IGNORECASE,
+)
+# Austin Auction layout: 'ARTIST (B.YEAR) VIETNAMESE TITLE' — nationality
+# is a standalone WORD after the year-paren, not inside parens.
+_ARTIST_PREFIX_AUSTIN_RE = re.compile(
+    r"^[A-Z][A-Z .'\-]+?"             # ARTIST IN ALL CAPS
+    r"\s*"
+    r"\(\s*(?:b\.?\s*)?\d{4}(?:\s*[-–]\s*\d{4})?\s*\)"  # (B.1949) or (1907-2001)
+    r"\s+vietnam(?:ese)?\s+",         # VIETNAMESE keyword
+    re.IGNORECASE,
+)
+
+
+def _strip_artist_prefix(title: str) -> str:
+    """Remove 'ARTIST (Vietnamese...), ' prefix from a bidwizard lot title.
+    Returns the bare artwork title.  Leaves untouched titles that don't
+    match the pattern.
+    """
+    if not title:
+        return title
+    # Try Austin Auction layout first ('THANH CHUONG (B.1949) VIETNAMESE TITLE')
+    stripped = _ARTIST_PREFIX_AUSTIN_RE.sub("", title).strip(" ,;:-")
+    if stripped != title.strip(" ,;:-"):
+        # Title-case it (all-caps source) so 'LACQUER PAINTING PORTRAIT'
+        # becomes 'Lacquer Painting Portrait'
+        if stripped == stripped.upper() and len(stripped) > 3:
+            stripped = " ".join(w.capitalize() for w in stripped.lower().split())
+        return stripped
+    # Otherwise try the parenthesised-nationality layout
+    stripped = _ARTIST_PREFIX_RE.sub("", title).strip(" ,;:-")
+    # Sanity: if regex over-matched and left almost nothing, keep original
+    if len(stripped) < 2 and len(title) > 5:
+        return title
+    return stripped
+
+
+# Trailing medium-word OR abbreviation in H1.
+#  - 'Untitled, Lacquer'           → 'Untitled'      (truncated full phrase)
+#  - 'Fishing at Nightfall, O/C'   → 'Fishing at Nightfall'  (O/C = oil on canvas)
+#  - 'Title, G/P'                  → 'Title'         (G/P = gouache on paper)
+# The full medium phrase is already captured from the description; the
+# title shouldn't carry these tokens.
+_TRAILING_MEDIUM_RE = re.compile(
+    r"[,;]\s*(?:"
+    r"lacquer|oil|gouache|watercolou?r|ink|mixed\s*media|"
+    r"acrylic|pastel|lithograph|etching|engraving|silkscreen|"
+    r"screenprint|tempera|"
+    r"[ogwi]/[cpbsm]"                # O/C, G/P, W/P, I/S abbreviations
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_trailing_medium(title: str) -> str:
+    """Remove trailing medium token / abbreviation from a lot title."""
+    if not title:
+        return title
+    # HTML-decode first ('&amp;' → '&') so the title reads clean.
+    decoded = html.unescape(title)
+    return _TRAILING_MEDIUM_RE.sub("", decoded).strip(" ,;:-")
+
+
 def fetch_lot_detail(lot_url):
     """Return dict(title, dim_cm, medium, estimate_low/high, hammer)."""
     try:
@@ -164,7 +244,8 @@ def fetch_lot_detail(lot_url):
     out = {}
     m_t = re.search(r"<h1[^>]*>([^<]+)</h1>", html)
     if m_t:
-        out["title"] = re.sub(r"\s+", " ", m_t.group(1)).strip()
+        raw_title = re.sub(r"\s+", " ", m_t.group(1)).strip()
+        out["title"] = _strip_artist_prefix(raw_title)
     m_d = _SIGHT_DIM_RE.search(html)
     if m_d:
         h_in = _parse_frac_inches(m_d.group(1))
@@ -189,15 +270,20 @@ def fetch_lot_detail(lot_url):
         except ValueError:
             pass
     m_desc = re.search(r'<meta name="description" content="([^"]+)"', html)
-    desc = (m_desc.group(1) if m_desc else "").lower()
-    for kw in ("oil on canvas", "oil on silk", "oil on board", "oil on paper",
-               "gouache on paper", "gouache on silk", "lacquer on wood",
-               "lacquer painting", "ink on silk", "ink on paper",
-               "watercolor on paper", "lithograph", "intaglio", "etching",
-               "mixed media"):
-        if kw in desc:
-            out["medium"] = kw
-            break
+    desc = (m_desc.group(1) if m_desc else "")
+    # Shared medium extractor — covers 'gouache on fabric', 'lacquer
+    # on board', 'gouache on cheesecloth', etc.  Decode &#039; first
+    # (the OG description comes HTML-encoded) so the keyword scan can
+    # find phrases that straddle apostrophes.
+    desc_clean = desc.replace("&#039;", "'").replace("&amp;", "&")
+    medium = extract_medium(desc_clean)
+    if medium:
+        out["medium"] = medium
+    # If the title still has a trailing medium token ('Untitled, Lacquer'),
+    # strip it.  The H1 sometimes only includes the first medium word
+    # because the full phrase ('Lacquer on Board') is in the description.
+    if out.get("title"):
+        out["title"] = _strip_trailing_medium(out["title"])
     # Sale date from catalog meta (best-effort)
     out["raw_desc"] = desc[:500]
     return out

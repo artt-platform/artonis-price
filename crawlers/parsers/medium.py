@@ -15,6 +15,8 @@ _MEDIUM_KEYWORDS = [
     "watercolour on paper", "watercolor on paper",
     "watercolour on silk", "watercolor on silk",
     "gouache on paper", "gouache on silk", "gouache on board",
+    "gouache on fabric", "gouache on cheesecloth and paper",
+    "gouache on cheesecloth", "gouache on canvas",
     "ink and colour on silk", "ink and color on silk",
     "ink on paper", "ink on silk",
     "lacquer on wood", "lacquer on board", "lacquer on panel",
