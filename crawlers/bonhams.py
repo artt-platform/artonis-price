@@ -357,6 +357,18 @@ def parse_lot(doc):
             kind = "drawing"
 
     sale_page_url = f"https://www.bonhams.com/auction/{auction_id}/" if auction_id else ""
+    # Strip bilingual Chinese block from provenance (defensive — Bonhams
+    # HK sales sometimes interleave EN+ZH).  SPEC §10.3.
+    from crawlers.parsers import strip_bilingual, parse_dim
+    provenance = strip_bilingual(provenance)
+    # Decompose dimensions into (w, h, area) using shared parser when the
+    # text form parses cleanly.  Sculpture single-axis ('H 50.5 cm') stays
+    # as a string only — parse_dim returns None there.
+    width_cm = height_cm = area_m2 = None
+    if dimensions and not dimensions.startswith(('H ', 'L ', 'W ')):
+        w, h, area, _ = parse_dim(dimensions, source="bonhams")
+        if w:
+            width_cm, height_cm, area_m2 = w, h, area
     return {
         "source": "bonhams",
         "source_url": source_url,
@@ -369,6 +381,10 @@ def parse_lot(doc):
         "artwork_title": artwork_title,
         "medium": medium,
         "dimensions": dimensions,
+        "width_cm": width_cm,
+        "height_cm": height_cm,
+        "area_m2": area_m2,
+        "catalog_description": (catalog_desc_plain or "")[:2000],
         "kind": kind,
         "year": year_str,
         "estimate_low": est_low,
