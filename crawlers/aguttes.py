@@ -242,22 +242,33 @@ def _parse_artwork_title(description_html, artist_header_text=""):
     return ""
 
 
+# Note: dimension + medium extraction moved to crawlers/parsers/ shared
+# module (SPEC §10).  The old _parse_dimensions / _parse_medium helpers
+# are kept as thin wrappers for tests and any caller that imports them.
 def _parse_dimensions(description_html):
+    """Legacy wrapper — prefer parsers.parse_dim() which returns
+    (width_cm, height_cm, area_m2, dim_str)."""
+    from crawlers.parsers import parse_dim
     plain = _strip_html(description_html)
-    m = re.search(r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm", plain, re.IGNORECASE)
-    if m:
-        return f"{m.group(1).replace(',', '.')} x {m.group(2).replace(',', '.')} cm"
-    return ""
+    _, _, _, dim_str = parse_dim(plain, source="aguttes")
+    return dim_str
 
 
 def _parse_medium(description_html):
+    """Legacy wrapper — prefer parsers.extract_medium()."""
+    from crawlers.parsers import extract_medium
     plain = _strip_html(description_html)
-    for pat in [
-        r"((?:Huile|Aquarelle|Encre|Laque|Gouache|Pastel|Fusain|Sanguine|Crayon|Soie|Acrylique|Mine\s+de\s+plomb)[^.\n,]{0,80})",
-    ]:
-        m = re.search(pat, plain, re.IGNORECASE)
-        if m:
-            return clean_text(m.group(1))[:120]
+    med = extract_medium(plain)
+    if med:
+        return med
+    # Aguttes-specific French keyword fallback for terms not in the shared list.
+    m = re.search(
+        r"((?:Huile|Aquarelle|Encre|Laque|Gouache|Pastel|Fusain|Sanguine|"
+        r"Crayon|Soie|Acrylique|Mine\s+de\s+plomb)[^.\n,]{0,80})",
+        plain, re.IGNORECASE,
+    )
+    if m:
+        return clean_text(m.group(1))[:120]
     return ""
 
 
@@ -427,10 +438,24 @@ def crawl(conn, verbose=True, filter_vn=True):
                     continue
 
                 artwork_title = _parse_artwork_title(desc_fr, _strip_html(title_fr))
-                dimensions = _parse_dimensions(desc_fr)
-                medium = _parse_medium(desc_fr)
-                # Fake/copy filter
-                check_text = (artwork_title + " " + artist + " " + _strip_html(desc_fr)[:200]).lower()
+                # Use shared parsers (SPEC §10) — get (w,h,area,dim_str) not just string
+                from crawlers.parsers import parse_dim, extract_medium
+                desc_plain = _strip_html(desc_fr)
+                width_cm, height_cm, area_m2, dimensions = parse_dim(desc_plain, source="aguttes")
+                medium = extract_medium(desc_plain)
+                # Aguttes-specific French keyword fallback when shared list misses
+                if not medium:
+                    m_med = re.search(
+                        r"((?:Huile|Aquarelle|Encre|Laque|Gouache|Pastel|Fusain|Sanguine|"
+                        r"Crayon|Soie|Acrylique|Mine\s+de\s+plomb)[^.\n,]{0,80})",
+                        desc_plain, re.IGNORECASE,
+                    )
+                    if m_med:
+                        medium = clean_text(m_med.group(1))[:120]
+                # Fake/copy filter — universal gate also catches this in
+                # common.py:insert_sale_result, but rejecting here saves
+                # the artist upsert + downstream processing.
+                check_text = (artwork_title + " " + artist + " " + desc_plain[:200]).lower()
                 if re.search(r"\b(d'?apr[eè]s|copy|copie|reproduction|estampe|print|lithograph)\b", check_text):
                     continue
 
@@ -454,6 +479,11 @@ def crawl(conn, verbose=True, filter_vn=True):
                     if m_y2:
                         year_str = m_y2.group(1)
 
+                # Strip bilingual block from provenance (defensive; Aguttes
+                # is FR-only so usually no-op, but shared utility is cheap).
+                from crawlers.parsers import strip_bilingual
+                page_provenance = strip_bilingual(page_provenance)
+
                 rec = {
                     "source": "aguttes",
                     "source_url": lot_url,
@@ -466,6 +496,10 @@ def crawl(conn, verbose=True, filter_vn=True):
                     "artwork_title": artwork_title,
                     "medium": medium,
                     "dimensions": dimensions,
+                    "width_cm": width_cm,
+                    "height_cm": height_cm,
+                    "area_m2": area_m2,
+                    "catalog_description": desc_plain[:2000],
                     "year": year_str,
                     "estimate_low": float(lot["low"]) if lot.get("low") else None,
                     "estimate_high": float(lot["high"]) if lot.get("high") else None,
