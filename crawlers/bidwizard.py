@@ -84,6 +84,14 @@ _HAMMER_RE = re.compile(
     r"(?:Hammer|Realized|Sold for|Sale\s+price|Winning\s+bid)[^$]*\$\s*([\d,]+)",
     re.IGNORECASE,
 )
+# After a sale closes, Everard / BidWizard removes the 'Hammer' label
+# and just shows the final price inside the bidding-area div.  Capture
+# that explicitly — without this, every Everard lot after the sale-end
+# date stays hammer=null even though the price is on the page.
+_BIDDING_AREA_RE = re.compile(
+    r'<div[^>]*class="[^"]*bidding-area[^"]*"[^>]*>\s*\$\s*([\d,]+)',
+    re.IGNORECASE,
+)
 
 
 def _parse_frac_inches(s):
@@ -174,7 +182,7 @@ def fetch_lot_detail(lot_url):
             out["estimate_high"] = float(m_e.group(2).replace(",", ""))
         except ValueError:
             pass
-    m_h = _HAMMER_RE.search(html)
+    m_h = _HAMMER_RE.search(html) or _BIDDING_AREA_RE.search(html)
     if m_h:
         try:
             out["hammer"] = float(m_h.group(1).replace(",", ""))
