@@ -67,6 +67,14 @@ ALL_CRAWLERS = [
     ('millon_vn',      'crawlers.millon_vn',      'millon',         'crawl'),
     ('gros_delettrez', 'crawlers.gros_delettrez', 'gros-delettrez', 'crawl'),
     ('dawsons',        'crawlers.dawsons',        'dawsons',        'crawl'),
+    # /auction-catalog/ WordPress platform — 5 houses sharing the same
+    # React-rendered lot layout.  Each entry point opens a fresh Playwright
+    # browser, so they're listed separately to keep run-time predictable.
+    ('joshua_kodner',  'crawlers.auction_catalog_platform', 'joshua_kodner',   'crawl_joshua'),
+    ('akiba_galleries','crawlers.auction_catalog_platform', 'akiba_galleries', 'crawl_akiba'),
+    ('lawsons',        'crawlers.auction_catalog_platform', 'lawsons',         'crawl_lawsons'),
+    ('john_moran',     'crawlers.auction_catalog_platform', 'john_moran',      'crawl_moran'),
+    ('shapiro',        'crawlers.auction_catalog_platform', 'shapiro',         'crawl_shapiro'),
     ('invaluable',     'crawlers.invaluable',     'invaluable',     'crawl_all'),
     ('global_auction', 'crawlers.global_auction', 'global-auction', 'crawl'),
     # BidWizard / online-auctions platform — shared by several US regional
