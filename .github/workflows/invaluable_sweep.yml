@@ -1,0 +1,55 @@
+name: Invaluable auction_title sweep
+
+# Periodic background fix-up for Invaluable lots:
+#  - auction_title was stamped 'X via Invaluable' on initial ingest
+#    (the Typesense card text doesn't carry the sale name).
+#  - sale_date sometimes captured a near-future estimate date from
+#    the card instead of the actual hammer date.
+# The real values live in the 'Auction Details' accordion of each lot
+# page, but Cloudflare aggressively blocks rapid bursts in one IP.
+# Running every 6 h in GitHub Actions IP space + processing 50 lots
+# per run gives Cloudflare time to forget the fingerprint between runs.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours
+  workflow_dispatch:
+    inputs:
+      max_lots:
+        description: 'Max lots to process this run'
+        required: false
+        default: '50'
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python deps
+        run: |
+          pip install requests playwright
+
+      - name: Install Playwright Chromium
+        run: |
+          playwright install --with-deps chromium
+
+      - name: Configure env
+        run: |
+          cat > .env.local <<EOF
+          SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY=${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EOF
+
+      - name: Run sweep
+        env:
+          MAX_LOTS: ${{ github.event.inputs.max_lots || '50' }}
+        run: |
+          python3 supabase/sweep_invaluable_titles.py --max "$MAX_LOTS"
