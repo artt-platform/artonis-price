@@ -360,7 +360,7 @@ _EXPLICIT_SCULPTURE_KWS = ("sculpture", "sculpté", "carved", "statuette", "bust
                            "socle", "pedestal", "without the base", "with base")
 
 
-def classify_kind(medium, title):
+def classify_kind(medium, title="", description=None, dimensions=None):
     """Classify a sale_result as one of:
        'painting' (default 2D — works on paper/silk/canvas/lacquer/panel/etc.)
        'sculpture' (3D works in bronze/terracotta/marble/stone; includes 3D lacquer objects)
@@ -369,10 +369,30 @@ def classify_kind(medium, title):
        'medal'    (commemorative coins/medals — distinct market)
     Order matters: most-specific first so a lacquer box doesn't get tagged as
     painting just because "laqué" matches.
+
+    description + dimensions kwargs added for 3D-marker detection (SPEC §11):
+    single-axis dim 'H 50.5 cm' + 'sans le socle' marker → sculpture even
+    when medium reads 'mixed media on wood' (lot 7933 Lebadang Personnage).
     """
     m = (medium or "").lower()
     t = (title or "").lower()
+    d = (description or "").lower()
+    dim = (dimensions or "").strip()
     blob = m + " " + t
+
+    # 3D-marker pre-check: single-axis dim ('H 50.5 cm') + wood-ish medium
+    # OR 'sans le socle' / 'pedestal' / 'patiné' in description → sculpture.
+    # Catches lot 7933 (Lebadang 'Personnage', 'mixed media on wood',
+    # 'H 50.5 cm') that the medium+title rules below would default to
+    # painting.
+    SCULPT_DESC_KWS = ("sans le socle", "without the base", "with base",
+                       "avec socle", " socle ", "pedestal", "patiné",
+                       "patinated")
+    if d and any(kw in d for kw in SCULPT_DESC_KWS):
+        return "sculpture"
+    if dim and (dim.startswith(('H ', 'L ', 'W '))) and \
+            ('wood' in m or 'bois' in m or 'mixed media' in m):
+        return "sculpture"
     # 1) Medals / commemorative objects — keep separate from fine art
     for kw in _MEDAL_KWS:
         if kw in blob:
