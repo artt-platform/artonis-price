@@ -21,10 +21,23 @@ PAINT_KWS = ('huile', 'oil', 'gouache', 'aquarelle', 'watercolour', 'watercolor'
              'oil on', 'oil paint')
 
 
-def classify_kind(medium, fallback='painting'):
-    """Return 'painting' / 'drawing' / 'print' / 'sculpture' from the
-    medium string.  Falls back to `fallback` when medium is empty or
-    unrecognised (caller can pass None to leave kind unset)."""
+SCULPT_DESC_KWS = (
+    'sans le socle', 'without the base', 'with base', 'avec socle',
+    ' socle ', 'pedestal', 'patiné', 'patinated',
+)
+
+
+def classify_kind(medium, fallback='painting', description=None, dimensions=None):
+    """Return 'painting' / 'drawing' / 'print' / 'sculpture'.
+
+    Sculpture is detected in 3 layers (any one is sufficient):
+      1. Material keyword in medium (bronze, terracotta, lead, etc.).
+      2. 3D-only markers in description (socle, pedestal, patiné).
+      3. Single-axis dim ('H 50.5 cm') with a wood/mixed medium — single
+         axis implies 3D even when the material phrase reads paint-on-support
+         (e.g. Lebadang 'Personnage', mixed media on wood, H 50.5 cm sans le
+         socle — kind=painting before, now correctly sculpture).
+    """
     if not medium:
         return fallback
     m = medium.lower()
@@ -32,11 +45,20 @@ def classify_kind(medium, fallback='painting'):
     has_sculpt = any(kw in m for kw in SCULPT_KWS)
     has_print = any(kw in m for kw in PRINT_KWS)
     has_draw = any(kw in m for kw in DRAW_KWS)
+    if description:
+        d = description.lower()
+        if any(kw in d for kw in SCULPT_DESC_KWS):
+            has_sculpt = True
+    if dimensions:
+        dl = dimensions.strip()
+        if (dl.startswith('H ') or dl.startswith('L ') or dl.startswith('W ')) \
+                and ('wood' in m or 'bois' in m or 'mixed media' in m):
+            has_sculpt = True
     if has_print:
         return 'print'
-    if has_sculpt and not has_paint:
+    if has_sculpt:
         return 'sculpture'
-    if has_draw and not has_paint and not has_sculpt:
+    if has_draw and not has_paint:
         return 'drawing'
     if has_paint:
         return 'painting'
