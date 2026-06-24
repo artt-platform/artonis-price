@@ -164,6 +164,10 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
             title = h1.inner_text().strip()
     except Exception:
         pass
+    # Preserve raw H1 for artist extraction — title gets cleaned (bio
+    # prefix stripped, pipe-split) but artist extraction needs the raw
+    # form to read 'DANG XUAN HOA | Self Portrait' → 'Dang Xuan Hoa'.
+    raw_h1 = title
     # Strip leading 'Lot 338:' from Joshua/Akiba layout
     m_lot = re.match(r'^Lot\s+\d+\s*[:.\-]\s*(.+)$', title, re.IGNORECASE)
     lot_no = ""
@@ -191,13 +195,19 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
         r"(?:b\.?\s*)?\d{4}(?:\s*[-–]\s*\d{4})?",
         "", title,
     ).strip()
+    # 33 Auction pipe layout: 'DANG XUAN HOA | Self Portrait' → 'Self Portrait'
+    if '|' in title:
+        parts = title.split('|', 1)
+        if len(parts) == 2 and len(parts[1].strip()) >= 3:
+            title = parts[1].strip()
     if len(title) < 3:
         title = ""
 
-    # Estimate
+    # Estimate — accept $, £, €, or 3-letter ISO codes (SGD, HKD, USD, etc.).
+    # 33 Auction renders 'Estimate: SGD\xa05,000 - SGD\xa07,000' (NBSP after code).
     est_low = est_high = None
     m_est = re.search(
-        r'Estimate[:\s]*[\$£€]?\s*([\d,]+)\s*[-–]\s*[\$£€]?\s*([\d,]+)',
+        r'Estimate[:\s]*(?:[\$£€]|[A-Z]{3})?\s*([\d,]+)\s*[-–]\s*(?:[\$£€]|[A-Z]{3})?\s*([\d,]+)',
         body, re.IGNORECASE,
     )
     if m_est:
@@ -207,11 +217,11 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
         except ValueError:
             pass
 
-    # Hammer / Sold for
+    # Hammer / Sold for — same currency-code tolerance.
     hammer = None
     m_sold = re.search(
         r'(?:Sold(?:\s+for)?|Hammer\s*price|Realised|Realized|Winning\s*bid)'
-        r'[:\s]*[\$£€]?\s*([\d,]+(?:\.\d+)?)',
+        r'[:\s]*(?:[\$£€]|[A-Z]{3})?\s*([\d,]+(?:\.\d+)?)',
         body, re.IGNORECASE,
     )
     if m_sold:
@@ -247,19 +257,32 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
                 medium = kw
                 break
 
-    # Artist — extract from title or h1.  Title patterns:
-    #   "Tran Luu Hau Vietnamese, 1928-2020"      → artist = "Tran Luu Hau"
-    #   "Vietnamese Hmong Folk Art Story Cloth"   → artist = ""  (anonymous)
-    #   "Le Pho French Vietnamese B 1907-2001"    → artist = "Le Pho"
+    # Artist — extract from title or h1.  Title patterns by host:
+    #   Joshua/Akiba: "Tran Luu Hau Vietnamese, 1928-2020"  → "Tran Luu Hau"
+    #   33 Auction:   "DANG XUAN HOA | Self Portrait"       → "Dang Xuan Hoa"
+    #   Lawsons/JM/Shapiro: "Vietnamese Style Oil Painting" → "" (anonymous)
     artist = ""
+    # Use raw_h1 (preserved before title cleaning) since title may have
+    # had the artist prefix stripped.
+    src_title = raw_h1 or title
+    # Pattern A: '<NAME> Vietnamese' / '<NAME> French Vietnamese'
     m_art = re.match(
         r"^([A-Z][A-Za-z .'\-]+?)\s+(?:French\s+)?(?:Vietnamese|Vietnam)\b",
-        title,
+        src_title,
     )
     if m_art:
         artist = m_art.group(1).strip()
-    elif title and ',' in title:
-        artist_part = title.split(',')[0].strip()
+    # Pattern B: '<NAME> | <Title>' (33 Auction layout)
+    elif '|' in src_title:
+        artist_part = src_title.split('|', 1)[0].strip()
+        if 2 < len(artist_part) < 50:
+            # Title-case if all caps ('DANG XUAN HOA' → 'Dang Xuan Hoa')
+            if artist_part == artist_part.upper() and ' ' in artist_part:
+                artist_part = ' '.join(w.capitalize() for w in artist_part.lower().split())
+            artist = artist_part
+    # Pattern C: '<NAME>, <Title>' (legacy)
+    elif src_title and ',' in src_title:
+        artist_part = src_title.split(',')[0].strip()
         if 2 < len(artist_part) < 40 and artist_part.split()[0][0].isupper():
             artist = artist_part
 
