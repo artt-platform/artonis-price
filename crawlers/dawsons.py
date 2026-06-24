@@ -108,19 +108,27 @@ def _list_lot_urls_for_auction(au):
         lot_links = re.findall(
             r'/auction/lot/([a-z0-9-]+)/[^"]*\?lot=(\d+)', text
         )
-        # Dedup by lot_id (search HTML repeats each lot in multiple slug
-        # forms — featured + list).  Without this dedup the crawler
-        # inserts each lot twice (slug variants → distinct source_urls).
-        new_links = [(s, l) for s, l in lot_links if l not in seen_ids]
+        # Dedup by lot_id WITHIN the same page too — the search HTML
+        # repeats each lot in 2-3 slug variants (featured + list +
+        # mobile).  Iterate in order; first occurrence per lot_id wins.
+        new_links: list[tuple[str, str]] = []
+        for s, l in lot_links:
+            if l in seen_ids:
+                continue
+            seen_ids.add(l)
+            new_links.append((s, l))
         if not new_links:
             break
-        for s, l in new_links:
-            seen_ids.add(l)
         for slug, lot_id in new_links:
             if _FAKE_MARKERS_RE.search(slug):
                 continue
             slug_norm = re.sub(r"^lot-\d+-+", "", slug)
-            if any(kw in slug_norm for kw in kws) or _PASS2_RE.search(slug_norm):
+            # Word-boundary match — bare substring lets 'le-lam' match
+            # 'tab[le-lam]p' on Moorcroft pottery lamps.  Require dash or
+            # string-boundary on both sides of the keyword.
+            slug_for_match = '-' + slug_norm + '-'
+            matched_kw = any((('-' + kw + '-') in slug_for_match) for kw in kws)
+            if matched_kw or _PASS2_RE.search(slug_norm):
                 results.append((slug, lot_id))
         time.sleep(0.4)
     return results
