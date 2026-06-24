@@ -95,10 +95,10 @@ def _fetch(url):
 
 def _list_lot_urls_for_auction(au):
     """Return list of (slug, lot_id) for VN-matching sold lots in this
-    auction.  Walks search pages until no new lots appear."""
+    auction.  Walks search pages until no new lot_id values appear."""
     catalog = _load_vn_catalog()
     kws = _build_keywords(catalog)
-    seen = set()
+    seen_ids = set()
     results = []
     for page in range(1, 30):
         url = f"{BASE}/auction/search/?au={au}&sd=2&page={page}"
@@ -108,10 +108,14 @@ def _list_lot_urls_for_auction(au):
         lot_links = re.findall(
             r'/auction/lot/([a-z0-9-]+)/[^"]*\?lot=(\d+)', text
         )
-        new_links = [(s, l) for s, l in lot_links if (s, l) not in seen]
+        # Dedup by lot_id (search HTML repeats each lot in multiple slug
+        # forms — featured + list).  Without this dedup the crawler
+        # inserts each lot twice (slug variants → distinct source_urls).
+        new_links = [(s, l) for s, l in lot_links if l not in seen_ids]
         if not new_links:
             break
-        seen.update(new_links)
+        for s, l in new_links:
+            seen_ids.add(l)
         for slug, lot_id in new_links:
             if _FAKE_MARKERS_RE.search(slug):
                 continue
@@ -266,7 +270,7 @@ def parse_lot_detail(text, slug, lot_id, au, verbose=False):
         "sale_page_url": f"{BASE}/auction/search/?au={au}&sd=2",
         "lot_number": "",
         "auction_title": sale_title,
-        "sale_date": "",     # Dawsons doesn't surface sale date in detail HTML reliably
+        "sale_date": None,   # Dawsons doesn't surface sale date in detail HTML reliably
         "sale_location": "Maidenhead, UK",
         "artist_name_raw": artist_name,
         "artwork_title": artwork_title,
