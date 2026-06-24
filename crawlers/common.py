@@ -504,7 +504,16 @@ def insert_sale_result(conn, record):
         artist_id = upsert_artist(conn, record["artist_name_raw"])
 
     dims = record.get("dimensions", "")
-    kind = classify_kind(record.get("medium", ""), record.get("artwork_title", ""))
+    # Pass description + dimensions so the classifier can flip sculpture
+    # when 3D markers are present (single-axis 'H 50.5 cm', 'sans le socle',
+    # 'patiné').  Without these, lot 7933 (Lebadang 'Personnage', H 50.5 cm,
+    # 'mixed media on wood', 'sans le socle') falls back to 'painting' every
+    # time the cron re-inserts.  User has had to re-flip this 3+ times.
+    kind = classify_kind(
+        record.get("medium", ""),
+        description=(record.get("catalog_description") or record.get("raw_snapshot", "")),
+        dimensions=dims,
+    )
     # Sculptures don't have meaningful 2D area — keep w/h pairs as parsed but null out area+ppm
     # Prints/drawings/medals get dim+area kept but $/m² nulled later (different market).
     w, h, area, _ = compute_area_and_price_per_m2(
