@@ -74,6 +74,9 @@ VN_SEARCH_KEYWORDS = [
 _SKIP_AUCTIONEERS = {
     "aguttes",
     "millon",
+    "millon-riviera",       # Millon's Côte d'Azur sales (same house)
+    "millon-paris",
+    "millon-cs",
     "cornette-de-saint-cyr",
     "cornette",
     "cornettedesaintcyr",
@@ -81,7 +84,27 @@ _SKIP_AUCTIONEERS = {
     "gros-and-delettrez",
     "gros-delettrez",
     "gros-et-delettrez",
+    "artcurial",            # we have direct crawlers/artcurial.py
+    "osenat",               # direct
 }
+
+
+# Houses where regional/partner variants share the parent name — match by
+# stem so 'millon-2025-spring' / 'millon-online' / 'millon-hk' all skip.
+_SKIP_AUCTIONEER_STEMS = ("millon", "aguttes", "cornette", "tajan",
+                          "gros-delettrez", "gros-et-delettrez",
+                          "artcurial", "osenat")
+
+
+def _is_skip_auctioneer(slug: str) -> bool:
+    """True when the auctioneer is one of our direct-crawler houses
+    (including regional/seasonal slug variants)."""
+    if not slug:
+        return False
+    s = slug.lower()
+    if s in _SKIP_AUCTIONEERS:
+        return True
+    return any(s == st or s.startswith(st + "-") for st in _SKIP_AUCTIONEER_STEMS)
 
 
 def _make_scraper():
@@ -333,10 +356,31 @@ def _parse_artist_and_title(description):
     head = lines[0]
     m = _ARTIST_HEADER_RE.match(head) or _ARTIST_HEADER_TC_RE.match(head)
     if not m:
-        return "", "", None, None
-    artist = clean_text(m.group(1))
-    b_yr = int(m.group(2)) if m.group(2) else None
-    d_yr = int(m.group(3)) if m.group(3) else None
+        # Drouot post-2026 redesign uses 'LASTNAME, Firstname [Title]'
+        # without paren-years for many member houses (observed on Roldan,
+        # Camille Chabroux, etc.).  Lat-1 chars handled; the strict VN
+        # catalog gate downstream rejects non-VN matches so we can be
+        # liberal here.
+        # Capture ALLCAPS lastname before the comma — drop the firstname
+        # token because Drouot's new format puts EITHER 'Western firstname'
+        # OR 'title' after the comma; we can't disambiguate locally.
+        # Strategy: use LASTNAME (Title-cased) as the artist.  Strict VN
+        # catalog gate (_is_vietnamese) will reject Western LASTNAMEs
+        # ('Gómez Canle', 'Le Parc') so we don't insert junk.  VN names
+        # ('Pham Hau', 'Nguyen Gia Tri') match by direct catalog entry.
+        m_comma = re.match(
+            r"^([A-ZÀ-ÿ]{2,}(?:\s+[A-ZÀ-ÿ]{2,}){0,2}),\s+",  # LAST (1-3 words),
+            head,
+        )
+        if not m_comma:
+            return "", "", None, None
+        artist = clean_text(m_comma.group(1).strip().title())
+        b_yr = d_yr = None
+        m = m_comma   # m.end() now points just after 'LASTNAME, '
+    else:
+        artist = clean_text(m.group(1))
+        b_yr = int(m.group(2)) if m.group(2) else None
+        d_yr = int(m.group(3)) if m.group(3) else None
 
     # Look for the title in lines AFTER the header (multi-line case) or after the
     # ")" on the SAME line (single-line / Heritage-style case).
@@ -694,7 +738,7 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
         # Skip whole sale if auctioneer is one of our dedicated-crawler houses —
         # avoids duplicate rows for the same lot under different `source`.
         auct_slug = (sale_info.get("auctioneer_slug") or "").lower()
-        if auct_slug in _SKIP_AUCTIONEERS:
+        if _is_skip_auctioneer(auct_slug):
             if verbose:
                 print(f"  [{i}/{len(sale_urls)}] skip {auct_slug} sale "
                       f"({len(lots)} lots)", flush=True)
@@ -847,11 +891,23 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
                 _watchlist_mark(conn, sale_url, "resolved",
                                 note=f"{results_seen} lots with results")
             else:
-                # Past sale but page returned no `result` values — either Drouot
-                # has hidden them or the auction was unsold. Mark for retry; if
-                # this is the 3rd+ attempt, leave it "pending" until 7-day cooldown.
-                _watchlist_mark(conn, sale_url, "pending",
-                                note=f"no results yet (lots={len(lots)})")
+                # Past sale but no hammer prices.  Get the current attempts
+                # count and decide whether to retire the URL.  Observed
+                # 2026-06-24: Drouot drops lot data within ~24h of close;
+                # after 3 retries we either hit the empty page or the sale
+                # simply went unsold.  Either way, no point keeping it
+                # pending forever (98-entry queue with 0 resolved).
+                attempts_row = conn.execute(
+                    "SELECT attempts FROM drouot_watchlist WHERE url = ?",
+                    (sale_url,)
+                ).fetchone()
+                attempts_so_far = (attempts_row[0] if attempts_row else 0)
+                if attempts_so_far >= 2:  # this call is attempt #3
+                    _watchlist_mark(conn, sale_url, "resolved",
+                                    note=f"no results after 3 attempts (lots={len(lots)})")
+                else:
+                    _watchlist_mark(conn, sale_url, "pending",
+                                    note=f"no results yet attempt={attempts_so_far + 1} (lots={len(lots)})")
         conn.commit()
         log_crawl_run(
             conn, "drouot",
