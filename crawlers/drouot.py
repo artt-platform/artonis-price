@@ -503,14 +503,31 @@ def _load_vn():
 
 
 def _is_vietnamese(artist_raw, vn_catalog, exclusions):
+    """True when the parsed artist name maps to a VN-catalog entry.
+
+    Match rules:
+      1. Exact normalised match (catalog has the artist exactly).
+      2. Input STARTS WITH a catalog entry + space — e.g. catalog has
+         'lebadang', input is 'lebadang dang' (compound surname).
+    Removed (2026-06-24): catalog-starts-with-input branch.  It let
+    single first names ('Henri', 'Jean', 'Pierre') match VN catalog
+    entries with the same first name ('Henri Nguyen Quy Kien',
+    'Jean Volang') producing false positives — Drouot redesign's
+    comma-format parser sometimes returns only the first name when the
+    lastname-then-firstname pattern picks up a wrong second word.
+    """
     from artonis_price_mvp import normalize_key
     norm = normalize_key(artist_raw)
     if not norm or norm in exclusions:
         return False
     if norm in vn_catalog:
         return True
+    # Single-token names (no space) require an EXACT catalog match —
+    # else 'Henri' alone matches catalog 'henri nguyen quy kien'.
+    if " " not in norm:
+        return False
     for k in vn_catalog:
-        if norm == k or norm.startswith(k + " ") or k.startswith(norm + " "):
+        if norm.startswith(k + " "):
             return True
     return False
 
