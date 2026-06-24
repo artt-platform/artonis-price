@@ -328,22 +328,34 @@ def extract_lots_from_page(url, verbose=False):
         else:
             auction_title = "Christie's"
 
-        # Extract dimensions: prefer JSON schema ("height_cm","width_cm"), fall back
-        # to "measurements_txt" ("W 26 ½ x H 20 in. (65.0 x 50.6 cm.)") and finally
-        # any "<num> x <num> cm" in the blob (older lots without the schema).
-        # Canonical storage: W × H (parse_dimensions assumes this order).
+        # Extract dimensions: prefer JSON schema ("height_cm","width_cm"
+        # explicitly labelled), fall back to shared parse_dim for the
+        # text form.  Christie's catalog convention = W × H (NOT in
+        # HW_FIRST_SOURCES per SPEC §10.1).
+        from crawlers.parsers import parse_dim, extract_medium, strip_bilingual
         dims = ""
+        width_cm = height_cm = area_m2 = None
         m_d = re.search(r'"height_cm":"(\d+(?:\.\d+)?)"\s*,\s*"width_cm":"(\d+(?:\.\d+)?)"', blob)
         if m_d:
-            dims = f"{float(m_d.group(2))} x {float(m_d.group(1))} cm"
+            # JSON gives explicit labels — use directly, ignore source convention
+            height_cm = float(m_d.group(1))
+            width_cm = float(m_d.group(2))
+            area_m2 = round(width_cm * height_cm / 10000, 4)
+            dims = f"{width_cm:g} x {height_cm:g} cm"
         else:
-            m_txt = re.search(r'\((\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*cm\.?\)', blob)
-            if m_txt:
-                dims = f"{float(m_txt.group(1))} x {float(m_txt.group(2))} cm"
-            else:
-                m_alt = re.search(r'(\d{1,3}(?:\.\d+)?)\s*x\s*(\d{1,3}(?:\.\d+)?)\s*cm', blob, re.IGNORECASE)
-                if m_alt:
-                    dims = f"{float(m_alt.group(1))} x {float(m_alt.group(2))} cm"
+            # Fall back to shared parser with Christie's W × H convention
+            w, h, area, dim_str = parse_dim(blob, source="christies")
+            if w:
+                width_cm, height_cm, area_m2, dims = w, h, area, dim_str
+
+        # Medium extraction (Christie's catalog often has 'oil on canvas',
+        # 'gouache on silk', etc. inline).  catalog_description = the
+        # description blob so backfill scripts have something to re-parse.
+        medium = extract_medium(description) if description else ""
+        # Provenance — Christie's HK uses bilingual EN+ZH (lesson from
+        # Sotheby's same pattern).  Default empty here since parser
+        # doesn't fetch detail page, but defensively strip if present.
+        prov_clean = strip_bilingual("")
 
         records.append({
             "source": "christies",
@@ -355,8 +367,12 @@ def extract_lots_from_page(url, verbose=False):
             "sale_location": "Hong Kong",
             "artist_name_raw": artist_name,
             "artwork_title": title,
-            "medium": "",
+            "medium": medium,
             "dimensions": dims,
+            "width_cm": width_cm,
+            "height_cm": height_cm,
+            "area_m2": area_m2,
+            "catalog_description": (description or "")[:2000],
             "year": year_blob,
             "estimate_low": est_low,
             "estimate_high": est_high,
@@ -364,7 +380,7 @@ def extract_lots_from_page(url, verbose=False):
             "price_with_premium": None,
             "currency": currency,
             "status": "sold",
-            "provenance": "",
+            "provenance": prov_clean,
             "raw_snapshot": artist_info[:200],
             "birth_year": birth_year,
             "death_year": death_year,
