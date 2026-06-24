@@ -226,6 +226,7 @@ VN_ARTIST_CATALOG = {
     "victor tardieu":          ("Victor Tardieu",            1870, 1937),
     "andre maire":             ("André Maire",               1898, 1984),
     "jean despujols":          ("Jean Despujols",            1886, 1965),
+    "henri mege":              ("Henri Mège",                1904, 1984),  # An Nam landscapes — Millon Arts du Vietnam
 
     # ===== DB contemporary artists from our gallery imports =====
     # Noah Bùi = real name Bùi Văn Hoàn (b. 1981)
