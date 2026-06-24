@@ -674,6 +674,29 @@ def _watchlist_mark(conn, url, status, note=None):
 
 # ---- main entry ------------------------------------------------------------
 
+def crawl_refetch_only(conn, **kw):
+    """Lightweight watchlist refetch — skip the discovery phase.
+
+    Designed for high-frequency cron (every 3-4h) to catch Drouot
+    result data within the narrow ~24h post-close window.  Drouot
+    drops lot data soon after sale close; the daily crawl() can miss
+    that window if its run time and the sale close time don't align.
+
+    No fresh sales discovered — only sales already in the watchlist
+    whose sale_date is past and have < 3 refetch attempts.
+    """
+    scraper = _make_scraper()
+    _ensure_watchlist_table(conn)
+    sales = _watchlist_due_for_refetch(conn)
+    if not sales:
+        if kw.get("verbose", True):
+            print("  [drouot/refetch] no watchlist URLs due — skip", flush=True)
+        return 0
+    if kw.get("verbose", True):
+        print(f"  [drouot/refetch] processing {len(sales)} watchlist URLs", flush=True)
+    return crawl(conn, sale_urls=sales, **kw)
+
+
 def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pages=200):
     """Crawl Drouot Asian-art sales. Returns (inserted, scanned).
 
@@ -819,19 +842,37 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
 
             currency = lot.get("currencyId", "EUR") or "EUR"
 
+            # Status / hammer policy (2026-06-24 — pre-capture pivot):
+            #   - hammer > 0      → status='sold'                  (post-sale visible)
+            #   - upcoming sale   → status='estimate_only'         (pre-capture, no fake price)
+            #   - past, no hammer → preserve existing OR 'passed'  (don't overwrite estimate→passed)
+            #
+            # User insight that drove this change: 'Drouot rất nhiều lot
+            # VN.  Bạn phải lên chiến lược để lấy trước các lot trước khi
+            # đấu.  Sau đó lắng nghe và catch lại sau khi đấu xong'.
+            # Drouot drops result data ~24h post-close; pre-capturing
+            # while sale is upcoming guarantees we keep the lot metadata
+            # even if our refetch misses the result window.
             if result > 0:
                 status = "sold"
                 hammer = result
                 results_seen += 1
+            elif sale_date and sale_date >= today_iso:
+                # Upcoming sale — insert with estimate-only marker.
+                # When watchlist refetches after sale close, hammer (if
+                # found) will overwrite this row's status → 'sold'.
+                status = "estimate_only"
+                hammer = None
             else:
-                # No hammer price reported. Distinguish:
-                #   - Sale date is in the future → SKIP (it's a still-open
-                #     timed auction; the "hammer = estimate midpoint" trick
-                #     misleads readers into thinking it sold).
-                #   - Sale date is past → keep as "passed" / unsold record
-                #     with no price (no fake midpoint).
-                if sale_date and sale_date >= today_iso:
-                    continue  # still open — watchlist will re-fetch after sale_date
+                # Past sale, no hammer in API.  Either truly unsold OR
+                # Drouot already hid the result.  Don't downgrade a
+                # previously captured estimate_only / sold record.
+                existing = conn.execute(
+                    "SELECT status FROM sale_results WHERE source_url = ?",
+                    (lot_url,),
+                ).fetchone()
+                if existing and existing[0] in ("sold", "estimate_only"):
+                    continue   # preserve prior data
                 status = "passed"
                 hammer = None
 
