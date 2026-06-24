@@ -15,8 +15,15 @@ sale_location / auction_house spelling variants here.
 # Each entry is the spelling that appears on Invaluable's lot detail
 # 'Auction House' link.  Lower-cased + trimmed match.  Include all
 # punctuation/trailing-digit variants you see in the wild ('Bonhams 3').
+#
+# Policy: include a house here ONLY when its direct crawler has actually
+# seeded data.  If we exclude an Invaluable upstream whose direct crawler
+# is broken or hasn't run yet, we lose lots with no fallback.  Houses
+# with 0 (shapiro, dawsons, global_auction) or barely-tested (john_moran 2,
+# larasati 3) direct lots stay OFF this list until their direct crawler
+# proves robust.
 DIRECT_OWNED_HOUSE_NAMES = {
-    # Top international houses
+    # Top international houses — well-tested, hundreds of lots each
     "bonhams",
     "bonhams 3",
     "christie's",
@@ -24,7 +31,7 @@ DIRECT_OWNED_HOUSE_NAMES = {
     "sotheby's",
     "sothebys",
     "phillips",
-    # France
+    # France — hundreds of lots from direct
     "aguttes",
     "tajan",
     "artcurial",
@@ -37,29 +44,22 @@ DIRECT_OWNED_HOUSE_NAMES = {
     "millon",
     # Asia
     "ravenel",
-    "larasati auctioneers",
-    "larasati",
     # Vietnam
     "le auction",
     "lê auction",
-    # US regional with direct crawler
+    # US regional with direct crawler — verified ≥10 lots
     "everard auctions and appraisals",
     "everard",
-    "austin auction gallery",
-    "austin auction",
-    "joshua kodner",
     "akiba galleries",
     "lawsons",
-    "john moran auctioneers",
-    "john moran",
-    "shapiro auctions llc",
-    "shapiro auctioneers",
-    "shapiro",
-    # UK
-    "dawsons auctioneers",
-    "dawsons",
-    # Misc with direct
-    "global auction",
+    # Newer direct crawlers — kept OFF until proven coverage:
+    #   "shapiro", "shapiro auctions llc", "shapiro auctioneers"  (0 direct lots)
+    #   "dawsons", "dawsons auctioneers"                          (0 direct lots)
+    #   "global auction"                                          (0 direct lots)
+    #   "john moran", "john moran auctioneers"                    (only 2 direct)
+    #   "larasati", "larasati auctioneers"                        (only 3 direct)
+    #   "austin auction gallery", "austin auction"                (only 2 direct)
+    #   "joshua kodner"                                           (only 6 direct)
 }
 
 
