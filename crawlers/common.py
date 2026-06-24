@@ -498,7 +498,21 @@ MEDIUM_TEXT_RE = re.compile(
 
 def insert_sale_result(conn, record):
     """Upsert a sale_result row. record must contain at minimum: source, source_url, artist_name_raw.
-    artist_id is resolved via upsert_artist if artist_name_raw is provided."""
+    artist_id is resolved via upsert_artist if artist_name_raw is provided.
+
+    UNIVERSAL gate: reject 'attributed to' / 'after X' / 'circle of' /
+    'd'après' / workshop / atelier / school-of lots BEFORE upsert.
+    These aren't the confirmed artist's work and would skew the
+    per-artist median.  Rule documented in SPEC §13.  Same gate from
+    here covers every crawler — even ones that forget to filter.
+    """
+    from crawlers.parsers import is_attribution
+    if is_attribution(
+        record.get("source_url", ""),
+        (record.get("artwork_title", "") or "") + " " + (record.get("artist_name_raw", "") or ""),
+    ):
+        return None
+
     artist_id = None
     if record.get("artist_name_raw"):
         artist_id = upsert_artist(conn, record["artist_name_raw"])

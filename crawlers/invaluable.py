@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 
 from crawlers.common import parse_amount, parse_date, insert_sale_result, clean_text, log_crawl_run
 from crawlers.direct_owned_houses import is_direct_owned
+from crawlers.parsers import is_attribution
 
 BASE = "https://www.invaluable.com"
 
@@ -223,6 +224,11 @@ def crawl_artist(page, slug, canonical_name, timeout=40000):
         # accurately (real hammer vs Invaluable's mid-estimate proxy).
         # See crawlers/direct_owned_houses.py for the full list.
         if is_direct_owned(parsed.get("auction_house", "")):
+            continue
+        # Skip 'attributed to' / 'after X' / 'circle of' lots — not the
+        # confirmed artist's work, would skew per-artist medians.  See
+        # crawlers/parsers/fake_markers.py.  Rule documented in SPEC §13.
+        if is_attribution(card.get("href", ""), parsed.get("title", "") or ""):
             continue
         rec = {
             "source": "invaluable",

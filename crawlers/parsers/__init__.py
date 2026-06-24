@@ -19,10 +19,12 @@ from .dim import parse_dim, HW_FIRST_SOURCES
 from .medium import extract_medium
 from .provenance import strip_bilingual
 from .artist_match import match_to_catalog, load_catalog
+from .fake_markers import is_attribution
 
 __all__ = [
     'parse_dim', 'HW_FIRST_SOURCES',
     'extract_medium',
     'strip_bilingual',
     'match_to_catalog', 'load_catalog',
+    'is_attribution',
 ]
