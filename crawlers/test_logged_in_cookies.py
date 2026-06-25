@@ -95,7 +95,18 @@ def main() -> None:
     sothebys_cookie = os.environ.get("SOTHEBYS_COOKIE", "")
     invaluable_cookie = os.environ.get("INVALUABLE_COOKIE", "")
 
-    # Sothebys HK Le Pho "Two ladies" — we know real hammer is HKD 5,080,000
+    # Test A: London 2026 lot operator just verified shows hammer in
+    # their browser (Yuskavage 'Bouquet', GBP 204,800).
+    fetch(
+        "https://www.sothebys.com/en/buy/auction/2026/contemporary-day-auction-l26017/bouquet",
+        sothebys_cookie,
+        "Sothebys London Yuskavage (operator confirmed visible: GBP 204,800)",
+    )
+    print()
+
+    # Test B: HK Le Pho — operator manually verified HKD 5,080,000.
+    # Compare to A: if A unlocks but B doesn't, restriction is regional
+    # (HK historical only).
     fetch(
         "https://www.sothebys.com/en/buy/auction/2023/modern-day-auction/"
         "le-pho-li-pu-two-ladies-liang-wei-shi-nu",
