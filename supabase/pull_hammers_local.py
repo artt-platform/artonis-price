@@ -122,34 +122,45 @@ def patch_hammer(row_id: int, hammer: float, currency: str, fx: dict) -> bool:
 
 # ─── Hammer extractors ─────────────────────────────────────────────
 
-# Sothebys: when logged in + entitled to see results, the Apollo cache
-# embeds sold:{__typename:"LotSold",amount:{value:NNN,currency:"GBP"}}
-# instead of {__typename:"ResultHidden"}.
+# Sothebys: the "Lot Sold: 5,080,000 HKD" text is loaded by AJAX ~3s
+# after page load.  Initial HTML has sold:{__typename:"ResultHidden"};
+# after AJAX, the rendered DOM (and updated Apollo cache) has the
+# real value.  Patterns below match BOTH the JSON cache and the
+# visible DOM text.
 SOTHEBYS_HAMMER_PATTERNS = [
-    re.compile(r'sold["\\]+:\s*\{[^}]*amount[^}]*?value[^:]*:\s*"?([\d.]+)[^}]*?currency[^:]*:\s*"?([A-Z]{3})', re.DOTALL),
-    re.compile(r'soldFor["\\]+:\s*\{[^}]*?amount["\\]+:\s*([\d.]+)[^}]*?currency["\\]+:\s*["\\]+([A-Z]{3})', re.DOTALL),
-    re.compile(r'Lot Sold[\s<]*[^>]*>[^<]*?([£$€HKD]+)\s*([\d,]+)', re.IGNORECASE),
-    re.compile(r'data-test-id="lot-sold-price"[^>]*>\s*([£$€HKD]+)?\s*([\d,]+)', re.IGNORECASE),
+    # Apollo cache after AJAX update: sold:{__typename:"LotSold",amount:{value:N,currency:"X"}}
+    re.compile(r'sold[\\"]*:\s*\{[^}]*?__typename[\\"]*:\s*[\\"]*LotSold[^}]*?value[\\"]*:\s*[\\"]*?([\d.]+)[^}]*?currency[\\"]*:\s*[\\"]*([A-Z]{3})', re.DOTALL),
+    # Loose JSON: amount + currency near each other
+    re.compile(r'amount[\\"]*:\s*[\\"]*?([\d.]+)[^}]{0,60}currency[\\"]*:\s*[\\"]*([A-Z]{3})', re.DOTALL),
+    # Rendered DOM: "Lot Sold" label then number + currency code
+    re.compile(r'Lot\s+Sold[\s\S]{0,300}?([\d,]+)\s*(HKD|GBP|USD|EUR|CHF|JPY|CNY|SGD|AUD|CAD)', re.IGNORECASE),
+    # Or number + currency directly with currency before
+    re.compile(r'(HKD|GBP|USD|EUR|CHF|JPY|CNY|SGD|AUD|CAD)\s*([\d,]+)\s*(?:Lot\s+Sold|sold)', re.IGNORECASE),
 ]
 
 
 def _parse_sothebys_hammer(html: str) -> tuple[float | None, str | None]:
-    # Try JSON-pattern first
     for pat in SOTHEBYS_HAMMER_PATTERNS:
         m = pat.search(html)
-        if m:
-            try:
-                groups = m.groups()
-                # Pattern returns (value, currency) or (currency, value)
-                if groups[0].replace(".","").replace(",","").isdigit():
-                    amt = float(groups[0].replace(",", ""))
-                    cur = groups[1]
-                else:
-                    amt = float(groups[1].replace(",", ""))
-                    cur = {"£":"GBP","$":"USD","€":"EUR","HKD":"HKD"}.get(groups[0], groups[0])
-                return amt, cur
-            except (ValueError, IndexError):
-                continue
+        if not m:
+            continue
+        try:
+            groups = m.groups()
+            # Figure out which group is number vs currency
+            for g in groups:
+                if not g:
+                    continue
+                clean = g.replace(",", "").replace(".", "")
+                if clean.isdigit():
+                    amt = float(g.replace(",", ""))
+                    if amt < 100:
+                        continue  # spurious match (page numbers etc)
+                    # find currency in the other group
+                    cur = next((x for x in groups if x and x not in (g,) and len(x) == 3 and x.isupper()), None)
+                    if cur:
+                        return amt, cur
+        except (ValueError, IndexError):
+            continue
     return None, None
 
 
@@ -236,7 +247,21 @@ def process_source(source: str, cookie: str, domain: str,
             print(f"      URL: {url[-80:]}")
             try:
                 page.goto(url, timeout=30_000, wait_until="domcontentloaded")
-                page.wait_for_timeout(2500)  # let JS render
+                # Sothebys loads the hammer via AJAX ~3s after DOM ready.
+                # Wait for the 'Lot Sold' label to appear; fall through
+                # if it never does (lot still in 'estimate only' state).
+                if source == "sothebys":
+                    try:
+                        page.wait_for_function(
+                            "() => document.body.innerText.includes('Lot Sold') "
+                            "|| document.body.innerText.includes('Auction Closed')",
+                            timeout=10_000,
+                        )
+                        page.wait_for_timeout(2500)  # let the amount render
+                    except Exception:
+                        pass  # parser will return None and move on
+                else:
+                    page.wait_for_timeout(2500)
                 html = page.content()
             except Exception as e:
                 print(f"      ✗ fetch failed: {type(e).__name__}: {str(e)[:80]}")
