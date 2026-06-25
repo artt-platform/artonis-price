@@ -56,6 +56,10 @@ ALL_CRAWLERS = [
     ('tajan',          'crawlers.tajan',          'tajan',          'crawl'),
     ('artcurial',      'crawlers.artcurial',      'artcurial',      'crawl'),
     ('drouot',         'crawlers.drouot',         'drouot',         'crawl'),
+    # Drouot 4-hourly refetch — option C of SPEC §14.4.  Lightweight:
+    # only refetches watchlist URLs whose sale_date is within 24h.
+    # Most calls find 0 due URLs and exit in seconds.
+    ('drouot_refetch', 'crawlers.drouot',         'drouot',         'crawl_refetch_only'),
     ('larasati',       'crawlers.larasati',       'larasati',       'crawl'),
     ('ravenel',        'crawlers.ravenel',        'ravenel',        'crawl'),
     ('osenat',         'crawlers.osenat',         'osenat',         'crawl'),

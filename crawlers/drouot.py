@@ -687,8 +687,8 @@ def _watchlist_add(conn, url, sale_date=None, title=None):
 
 
 def _watchlist_due_for_refetch(conn):
-    """Return URLs whose sale_date is past + still pending + not too many attempts.
-    Spaces out retries: ≤3 attempts in first 7 days, then weekly after."""
+    """Daily-cron variant.  Returns URLs whose sale_date is past, still
+    pending, and not too many attempts.  Broader 7-day retry window."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     rows = conn.execute("""
         SELECT url FROM drouot_watchlist
@@ -706,6 +706,40 @@ def _watchlist_due_for_refetch(conn):
     return [r[0] for r in rows]
 
 
+def _watchlist_due_for_4h_refetch(conn):
+    """4-hour-cron variant — option C of the SPEC §14.4 strategy.
+
+    Targets the narrow ~12-48h post-close window where Drouot still
+    serves hammer prices in the rendered HTML.  Filter:
+      • sale_date in [now-24h, now+2h]    — fresh post-sale only
+      • status = 'pending'                  — not yet resolved
+      • last_checked < now-3h               — cooldown so we don't
+                                              hammer Drouot when N
+                                              cron runs back-to-back
+      • attempts < 3                        — don't grind forever
+
+    Result is naturally bounded: a normal day has ≤ 5-10 Drouot Asian
+    Art sales ending within 24h.  Most 4h runs find 0 due URLs and
+    exit in seconds (Option C: idle most of the time, focused work
+    when needed).
+    """
+    rows = conn.execute("""
+        SELECT url FROM drouot_watchlist
+        WHERE status = 'pending'
+          AND sale_date IS NOT NULL
+          AND sale_date >= date('now','-1 day')
+          AND sale_date <= date('now','+2 hours')
+          AND attempts < 3
+          AND (
+              last_checked IS NULL
+              OR last_checked < datetime('now','-3 hours')
+          )
+        ORDER BY sale_date DESC
+        LIMIT 50
+    """).fetchall()
+    return [r[0] for r in rows]
+
+
 def _watchlist_mark(conn, url, status, note=None):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     conn.execute("""
@@ -720,23 +754,26 @@ def _watchlist_mark(conn, url, status, note=None):
 def crawl_refetch_only(conn, **kw):
     """Lightweight watchlist refetch — skip the discovery phase.
 
-    Designed for high-frequency cron (every 3-4h) to catch Drouot
-    result data within the narrow ~24h post-close window.  Drouot
-    drops lot data soon after sale close; the daily crawl() can miss
-    that window if its run time and the sale close time don't align.
+    Designed for the 4-hourly cron job to catch Drouot result data
+    within the narrow ~12-48h post-close window when Drouot still
+    serves hammer prices in the rendered HTML.  Drouot drops lot
+    data soon after that window; the daily crawl() alone can miss
+    sales whose end time doesn't align with the 02:00 UTC cron.
 
-    No fresh sales discovered — only sales already in the watchlist
-    whose sale_date is past and have < 3 refetch attempts.
+    Uses the TIGHT 4h-cron watchlist filter
+    (_watchlist_due_for_4h_refetch — sale_date ∈ [-24h, +2h] AND
+    last_checked < -3h AND attempts < 3).  Most calls find 0 due
+    URLs and exit in seconds.
     """
-    scraper = _make_scraper()
     _ensure_watchlist_table(conn)
-    sales = _watchlist_due_for_refetch(conn)
+    sales = _watchlist_due_for_4h_refetch(conn)
     if not sales:
         if kw.get("verbose", True):
-            print("  [drouot/refetch] no watchlist URLs due — skip", flush=True)
+            print("  [drouot/refetch] no watchlist URLs due — exit idle", flush=True)
         return 0
     if kw.get("verbose", True):
-        print(f"  [drouot/refetch] processing {len(sales)} watchlist URLs", flush=True)
+        print(f"  [drouot/refetch] processing {len(sales)} watchlist URLs "
+              f"(sale_date within last 24h)", flush=True)
     return crawl(conn, sale_urls=sales, **kw)
 
 

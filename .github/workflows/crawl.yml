@@ -6,8 +6,12 @@ name: Crawl auctions
 #   - Manual: pick sources via dropdown
 on:
   schedule:
-    - cron: '0 2 * * *'    # daily 09:00 ICT
-    - cron: '0 19 * * 0'   # Sunday 02:00 Mon ICT
+    - cron: '0 2 * * *'    # daily 09:00 ICT — full crawl all sources
+    - cron: '0 19 * * 0'   # Sunday 02:00 Mon ICT — weekly Playwright + refresh
+    # 4-hourly Drouot refetch (option C, SPEC §14.4).  Catches hammer
+    # prices within the 12-48h window Drouot serves them.  Lightweight:
+    # only refetches watchlist URLs with sale_date in last 24h.
+    - cron: '0 */4 * * *'  # 00, 04, 08, 12, 16, 20 UTC daily
   workflow_dispatch:
     inputs:
       crawlers:
@@ -76,6 +80,11 @@ jobs:
             # Manual: use user input, all if empty
             CRAWLERS_LIST="${{ github.event.inputs.crawlers }}"
             MAX_PAGES="${{ github.event.inputs.max_pages }}"
+          elif [ "${{ github.event.schedule }}" = "0 */4 * * *" ]; then
+            # 4-hourly: Drouot refetch only (option C, SPEC §14.4).
+            # Most runs find no due URLs and exit in seconds.
+            CRAWLERS_LIST="drouot_refetch"
+            MAX_PAGES="50"
           elif [ "${{ github.event.schedule }}" = "0 2 * * *" ]; then
             # Daily: fast sources only (no Playwright)
             CRAWLERS_LIST="christies,sothebys,phillips,bonhams,millon,millon_vn,tajan,artcurial,larasati,ravenel,osenat,gros_delettrez,dawsons,drouot,everard,austin_auction"
