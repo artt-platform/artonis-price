@@ -288,6 +288,78 @@ def _extract_sothebys_auction_id(page) -> str | None:
     return m.group(1) if m else None
 
 
+def _sothebys_direct_request(lot_url, bearer, probe=False, source_label="sothebys"):
+    """Skip Playwright entirely: GET the lot page (no auth needed for
+    HTML) → extract lotId → POST the GraphQL with Bearer.  Much
+    faster than driving Chrome, and Sothebys's anti-automation
+    only kicks in when there's no Bearer.  Confirmed 2026-06-25
+    against the Le Pho HK known lot."""
+    import json as _json
+    # 1. Get the lot page for lotId
+    try:
+        r = requests.get(lot_url, headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }, timeout=20)
+    except Exception as e:
+        print(f"      ✗ lot page fetch failed: {e}")
+        return None, None
+    if r.status_code != 200:
+        print(f"      ✗ lot page non-200: {r.status_code}")
+        return None, None
+    m = re.search(r'"lotId"\s*:\s*"([0-9a-fA-F-]{36})"', r.text)
+    if not m:
+        print(f"      ✗ couldn't extract lotId from page ({len(r.text)} chars)")
+        return None, None
+    lot_id = m.group(1)
+    if probe:
+        print(f"      lotId: {lot_id}")
+
+    # 2. POST GraphQL with Bearer
+    try:
+        gr = requests.post(
+            SOTHEBYS_GRAPHQL_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "*/*",
+                "Authorization": f"Bearer {bearer}",
+                "apollographql-client-name": "Bidclient",
+                "origin": "https://www.sothebys.com",
+                "referer": "https://www.sothebys.com/",
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            },
+            json={
+                "operationName": "LotHammer",
+                "query": _SOTHEBYS_QUERY,
+                "variables": {"id": lot_id, "countryOfOrigin": "IE", "language": "ENGLISH"},
+            },
+            timeout=20,
+        )
+    except Exception as e:
+        print(f"      ✗ graphql request failed: {e}")
+        return None, None
+    if gr.status_code != 200:
+        print(f"      ✗ graphql non-200: {gr.status_code}, body[0:300]={gr.text[:300]!r}")
+        # Common case: 401 = Bearer expired
+        if gr.status_code == 401:
+            print("        Bearer expired — paste a fresh one to .env.local:SOTHEBYS_BEARER=…")
+        return None, None
+    try:
+        data = gr.json()
+    except Exception as e:
+        print(f"      ✗ graphql JSON parse: {e}")
+        return None, None
+
+    if probe:
+        sample = ROOT / f"sample_{source_label}_graphql_LotHammer.json"
+        sample.write_text(_json.dumps(data, indent=2, ensure_ascii=False))
+        print(f"      ◆ graphql JSON written to {sample}")
+
+    return _parse_sothebys_graphql_response(data)
+
+
 def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sothebys"):
     """Cookie → Bearer → GraphQL → hammer.
 
@@ -492,8 +564,12 @@ def _parse_sothebys_graphql_response(data: dict) -> tuple[float | None, str | No
         currency = ((lot.get("auction") or {}).get("currencyV2")
                     or (lot.get("auction") or {}).get("currency"))
         if tname == "ResultVisible":
-            prems = sold.get("premiums") or []
-            for p in prems:
+            prems = sold.get("premiums")
+            # premiums is normally a single object {finalPriceV2: {amount}}
+            # but tolerate list shape too in case Sothebys changes schema
+            if isinstance(prems, dict):
+                prems = [prems]
+            for p in (prems or []):
                 fp = p.get("finalPriceV2") or p.get("finalPrice") or {}
                 amt = fp.get("amount")
                 if amt:
@@ -617,12 +693,17 @@ def process_source(source: str, cookie: str, domain: str,
             url = row["source_url"]
             print(f"\n  [{i}/{len(rows)}] {row['artist_name_raw']} | {(row.get('artwork_title') or '')[:50]}")
             print(f"      URL: {url[-80:]}")
-            # Sothebys: capture the bsp-api/lot/details response directly
-            # (the AJAX the operator described — page initially shows
-            # 'Log in to view', then the API responds and the hammer
-            # replaces the button).  Cookies authenticate the call.
+            # Sothebys: prefer the direct path (no Playwright) when
+            # SOTHEBYS_BEARER is in env — confirmed working 2026-06-25
+            # against Le Pho HK lot.  Playwright path stays as fallback
+            # for future runs where we discover how to make Auth0 SDK
+            # work under automation.
             if source == "sothebys":
-                amt, cur = _fetch_sothebys_hammer_via_api(page, url, probe=probe, source_label=source)
+                env_bearer = os.environ.get("SOTHEBYS_BEARER", "").strip()
+                if env_bearer:
+                    amt, cur = _sothebys_direct_request(url, env_bearer, probe=probe, source_label=source)
+                else:
+                    amt, cur = _fetch_sothebys_hammer_via_api(page, url, probe=probe, source_label=source)
             else:
                 try:
                     page.goto(url, timeout=30_000, wait_until="domcontentloaded")
