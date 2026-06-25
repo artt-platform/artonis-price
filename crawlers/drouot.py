@@ -160,13 +160,14 @@ _LOT_FIELD_PATTERNS = {
 def _drouot_image_url(photo_path: str | None) -> str | None:
     """Build a public image URL from Drouot's photo.path.
 
-    Drouot serves lot images at https://img.drouot.com/{size}/{path}
-    — sizes range from -m (thumbnail) to -h (full).  We pick -l (large)
-    as a good balance for thumbnails and detail pages.
+    Drouot serves lot images at
+    https://cdn.drouot.com/d/image/lot/raw?path={path}
+    (verified 2026-06-26 by inspecting a rendered lot page —
+    img.drouot.com guess from the path schema does NOT resolve).
     """
     if not photo_path:
         return None
-    return f"https://img.drouot.com/l/{photo_path}"
+    return f"https://cdn.drouot.com/d/image/lot/raw?path={photo_path}"
 
 
 def _unescape_js_string(s):
