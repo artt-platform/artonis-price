@@ -419,8 +419,11 @@ def upsert_artist(conn, name):
     normalized = normalize_key(name)
     row = conn.execute("select id from artists where normalized_name = ?", (normalized,)).fetchone()
     if row:
-        conn.execute("update artists set name = ?, updated_at = ? where id = ?", (name, now_iso(), row["id"]))
-        return row["id"]
+        # row may be a plain tuple (default sqlite3) or sqlite3.Row.
+        # Use [0] for portability — first column is `id`.
+        artist_id = row[0]
+        conn.execute("update artists set name = ?, updated_at = ? where id = ?", (name, now_iso(), artist_id))
+        return artist_id
     conn.execute(
         """
         insert into artists(name, normalized_name, updated_at)
@@ -430,7 +433,7 @@ def upsert_artist(conn, name):
         (name, normalized, now_iso()),
     )
     row = conn.execute("select id from artists where name = ?", (name,)).fetchone()
-    return row["id"] if row else None
+    return row[0] if row else None
 
 
 def upsert_exhibition(conn, item):

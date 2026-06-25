@@ -773,6 +773,35 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
         r.encoding = "utf-8"
 
         sale_info, lots = parse_sale_page(r.text, sale_url)
+
+        # Pagination — Drouot sales over 100 lots split into ?page=2/3/…
+        # Page 1 → 100 lots; subsequent pages → 100 more until a short
+        # page (<100) signals the end.  Without this, lots beyond 100
+        # silently vanished (e.g. Marambat sale 178740 lot 140 Nguyen
+        # Huyen at €? wasn't seen).  Detect: if page 1 returns the cap
+        # (100) keep paginating until short page or 10-page safety stop.
+        if len(lots) >= 100:
+            seen_lot_ids = {lot.get("id") for lot in lots}
+            for page in range(2, 11):
+                pg_url = f"{sale_url}?page={page}" if "?" not in sale_url else f"{sale_url}&page={page}"
+                try:
+                    rp = scraper.get(pg_url, timeout=30)
+                    rp.encoding = "utf-8"
+                except Exception:
+                    break
+                if rp.status_code != 200:
+                    break
+                _, page_lots = parse_sale_page(rp.text, pg_url)
+                # Stop when a page returns 0 new lots (dedup against seen)
+                new_lots = [lot for lot in page_lots if lot.get("id") not in seen_lot_ids]
+                if not new_lots:
+                    break
+                lots.extend(new_lots)
+                seen_lot_ids.update(lot.get("id") for lot in new_lots)
+                if len(page_lots) < 100:
+                    break   # short page → no more
+                time.sleep(0.3)
+
         total_scanned += len(lots)
 
         # Skip whole sale if auctioneer is one of our dedicated-crawler houses —
