@@ -153,32 +153,48 @@ def _parse_sothebys_hammer(html: str) -> tuple[float | None, str | None]:
     return None, None
 
 
-# Invaluable: when logged in, the "Log in to view" button becomes a
-# concrete sold amount.  Layout varies; try a few patterns.
+# Invaluable: when logged in, the lot data island has the real sold
+# amount.  Discovered 2026-06-26 by probe: the relevant fields are
+# embedded in the page's __NEXT_DATA__ / preloaded state.
+#   "isLotClosed":true,"lotRef":"F474...","currentBid":80000,"soldAmount":80000
+# So we look for soldAmount (post-sale truth), with currentBid as a
+# fallback for lots where soldAmount isn't present yet.
 INVALUABLE_HAMMER_PATTERNS = [
-    re.compile(r'<dt[^>]*>Sold(?:\s+for)?:?\s*</dt>\s*<dd[^>]*>\s*([£$€HKD]+)?\s*([\d,]+)', re.IGNORECASE),
-    re.compile(r'class="[^"]*sold-price[^"]*"[^>]*>\s*([£$€HKD]+)?\s*([\d,]+)', re.IGNORECASE),
-    re.compile(r'Sold(?:\s+for)?:\s*([£$€HKD]+)?\s*([\d,]+)\s*(?:USD|EUR|GBP|HKD|CAD)?', re.IGNORECASE),
-    re.compile(r'"realizedPrice"\s*:\s*([\d.]+)', re.IGNORECASE),
-    re.compile(r'"hammerPrice"\s*:\s*([\d.]+)', re.IGNORECASE),
+    re.compile(r'"soldAmount"\s*:\s*([\d.]+)'),
+    re.compile(r'"isLotClosed"\s*:\s*true[^}]*"currentBid"\s*:\s*([\d.]+)'),
+    re.compile(r'"realizedPrice"\s*:\s*([\d.]+)'),
+    re.compile(r'"hammerPrice"\s*:\s*([\d.]+)'),
+]
+
+# Currency for Invaluable lives in a separate field — look it up near
+# soldAmount.  Falls back to USD when missing (most lots).
+INVALUABLE_CURRENCY_PATTERNS = [
+    re.compile(r'"currency"\s*:\s*"([A-Z]{3})"'),
+    re.compile(r'"currencyCode"\s*:\s*"([A-Z]{3})"'),
 ]
 
 
 def _parse_invaluable_hammer(html: str) -> tuple[float | None, str | None]:
+    # Find sold amount first
+    amt = None
     for pat in INVALUABLE_HAMMER_PATTERNS:
         m = pat.search(html)
         if m:
             try:
-                groups = m.groups()
-                if len(groups) == 1:
-                    return float(groups[0].replace(",", "")), "USD"
-                # 2 groups — currency symbol + number
-                amt = float(groups[1].replace(",", ""))
-                cur = {"£":"GBP","$":"USD","€":"EUR","HKD":"HKD"}.get(groups[0] or "$", "USD")
-                return amt, cur
+                amt = float(m.group(1))
+                if amt > 0:
+                    break
+                amt = None
             except (ValueError, IndexError):
                 continue
-    return None, None
+    if amt is None:
+        return None, None
+    # Currency
+    for pat in INVALUABLE_CURRENCY_PATTERNS:
+        m = pat.search(html)
+        if m and m.group(1) in {"USD","EUR","GBP","HKD","CAD","AUD","SGD","CHF","JPY","CNY","MYR","THB"}:
+            return amt, m.group(1)
+    return amt, "USD"  # safe default
 
 
 # ─── Main ──────────────────────────────────────────────────────────
