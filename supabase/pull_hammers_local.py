@@ -213,71 +213,73 @@ def _walk_json_for_hammer(obj, _key_path=""):
 
 
 def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sothebys"):
-    """Sothebys loads the hammer via a separate AJAX:
+    """Sothebys's hammer is loaded by a separate AJAX:
         GET /bsp-api/lot/details?itemId={lotId}
-    Cookies authenticate it.  We use Playwright's response listener to
-    grab the JSON without re-issuing the request ourselves.
+    The endpoint content-negotiates: it serves JSON when called as
+    XHR with Accept: application/json, and HTML otherwise.  Earlier
+    attempts caught the response *via* the page navigation context,
+    which Sothebys rendered as HTML.
+
+    Approach: load the lot page in Playwright (for cookie auth), then
+    fire fetch() *from inside the page* with explicit JSON headers.
+    The fetch runs under the page's authenticated session and ships
+    the right Accept header.
     """
-    captured = {"json": None, "status": None, "url": None, "raw": None, "err": None}
-
-    def on_response(response):
-        if captured["json"] is not None:
-            return
-        if "/bsp-api/lot/details" in response.url:
-            captured["url"] = response.url
-            captured["status"] = response.status
-            # Try response.text() first then json.loads — more reliable
-            # than response.json() when content-type is not strictly
-            # application/json.
-            import json as _json
-            try:
-                txt = response.text()
-                captured["raw"] = txt[:300]
-                captured["json"] = _json.loads(txt)
-            except Exception as ex:
-                captured["err"] = f"{type(ex).__name__}: {str(ex)[:120]}"
-                # Try .body() as a last resort
-                try:
-                    raw = response.body().decode("utf-8", errors="replace")
-                    captured["raw"] = raw[:300]
-                    captured["json"] = _json.loads(raw)
-                    captured["err"] = None
-                except Exception as ex2:
-                    captured["err"] = captured["err"] + f" / body: {type(ex2).__name__}: {str(ex2)[:80]}"
-
-    page.on("response", on_response)
+    import json as _json
     try:
         page.goto(lot_url, timeout=30_000, wait_until="domcontentloaded")
-        # Poll up to 12s — the AJAX is normally fired within 3s.
-        for _ in range(24):
-            if captured["json"] is not None:
-                break
-            page.wait_for_timeout(500)
+        page.wait_for_timeout(1500)  # let Sothebys's own JS settle
     except Exception as e:
         print(f"      ✗ goto failed: {type(e).__name__}: {str(e)[:80]}")
-        try:
-            page.remove_listener("response", on_response)
-        except Exception:
-            pass
         return None, None
-    try:
-        page.remove_listener("response", on_response)
-    except Exception:
-        pass
 
-    data = captured["json"]
-    if data is None:
-        print(f"      ✗ bsp-api: status={captured['status']}")
-        if captured["err"]:
-            print(f"        parse error: {captured['err']}")
-        if captured["raw"]:
-            print(f"        raw[0:300]: {captured['raw']!r}")
+    # Extract lotId from page HTML
+    html = page.content()
+    m = re.search(r'"lotId"\s*:\s*"([0-9a-fA-F-]{36})"', html)
+    if not m:
+        print(f"      ✗ couldn't extract lotId from page ({len(html)} chars)")
+        return None, None
+    lot_id = m.group(1)
+    if probe:
+        print(f"      lotId: {lot_id}")
+
+    # Fire the AJAX from within the page context — same origin, same
+    # cookies, same fingerprint as the real browser session.
+    js = (
+        "async (lotId) => {\n"
+        "  const r = await fetch('/bsp-api/lot/details?itemId=' + lotId, {\n"
+        "    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },\n"
+        "    credentials: 'include',\n"
+        "  });\n"
+        "  return { status: r.status, contentType: r.headers.get('content-type'), text: await r.text() };\n"
+        "}"
+    )
+    try:
+        result = page.evaluate(js, lot_id)
+    except Exception as e:
+        print(f"      ✗ evaluate failed: {type(e).__name__}: {str(e)[:120]}")
+        return None, None
+
+    status = result.get("status")
+    ctype = result.get("contentType") or ""
+    txt = result.get("text") or ""
+    if probe:
+        print(f"      bsp-api: status={status}, content-type={ctype}, body {len(txt)} chars")
+
+    if status != 200:
+        print(f"      ✗ bsp-api non-200: status={status}, body[0:200]={txt[:200]!r}")
+        return None, None
+
+    try:
+        data = _json.loads(txt)
+    except Exception as e:
+        print(f"      ✗ bsp-api JSON parse failed: {type(e).__name__}: {str(e)[:80]}")
+        print(f"        body[0:200]={txt[:200]!r}")
         return None, None
 
     if probe:
-        import json
         sample = ROOT / f"sample_{source_label}_bsp_api.json"
-        sample.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        sample.write_text(_json.dumps(data, indent=2, ensure_ascii=False))
         print(f"      ◆ bsp-api JSON written to {sample}")
 
     return _walk_json_for_hammer(data)
