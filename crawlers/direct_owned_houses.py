@@ -80,3 +80,31 @@ def is_direct_owned(house_name: str) -> bool:
     import re
     base = re.sub(r"\s+\d+$", "", s)
     return base in DIRECT_OWNED_HOUSE_NAMES
+
+
+# Auction houses we explicitly EXCLUDE from any crawl path —
+# typically because the operator flagged them as low-trust (fake
+# paintings, lots re-listed multiple sales with no buyer, mis-
+# attribution at scale, etc.).  Different from `is_direct_owned`:
+# direct-owned houses ARE crawled (just via our own path).  Excluded
+# houses are SKIPPED everywhere.
+EXCLUDED_HOUSES = {
+    # 2026-06-25 — operator: "nhiều tranh giả, nhiều tranh đăng đi
+    # đăng lại nhiều phiên mà ko ai mua".  All Cadmore lots in our
+    # DB had hammer=None (passed every sale).
+    "cadmore auctions",
+    "cadmore",
+}
+
+
+def is_excluded(house_name: str) -> bool:
+    """True when the house should be SKIPPED across all crawl paths
+    (low-trust / fake-painting concerns)."""
+    if not house_name:
+        return False
+    s = house_name.strip().lower()
+    if s in EXCLUDED_HOUSES:
+        return True
+    import re
+    base = re.sub(r"\s+\d+$", "", s)
+    return base in EXCLUDED_HOUSES

@@ -160,6 +160,72 @@ def fetch_drouot():
     return out
 
 
+def fetch_millon():
+    """Millon /calendrier — French calendar of upcoming sales.
+
+    The page is server-rendered HTML.  Each sale block contains the
+    catalogue URL (/catalogue/venteNNNN-slug), the French date string
+    (e.g. '27 juin 2026'), and the sale title.  Keyword-filter to keep
+    only Asian-art / Vietnam-flagged sales (Millon publishes other
+    categories on the same calendar).
+    """
+    s = _scraper()
+    try:
+        html_text = s.get("https://www.millon.com/calendrier", timeout=25).text
+    except Exception:
+        return []
+    out = []
+    seen = set()
+    # Each sale has /catalogue/venteXXXX-slug — paired with a French date
+    # nearby.  Find date + URL + title in one pattern.
+    # 'juin 2026' = June 2026.  Months: janv/fev/mars/avr/mai/juin/juil/aout/sept/oct/nov/dec
+    MONTH_MAP = {
+        'janv': '01', 'jan': '01',
+        'fév': '02', 'fev': '02', 'feb': '02',
+        'mars': '03', 'mar': '03',
+        'avr': '04',
+        'mai': '05',
+        'juin': '06',
+        'juil': '07',
+        'août': '08', 'aout': '08',
+        'sept': '09',
+        'oct': '10',
+        'nov': '11',
+        'déc': '12', 'dec': '12',
+    }
+    # Find ventes — for each, look at surrounding text for date and title
+    for m in re.finditer(r'/catalogue/(vente\d+)-([a-z0-9-]+?)["\'\s<&]', html_text, re.IGNORECASE):
+        vid, slug = m.group(1), m.group(2)
+        if vid in seen: continue
+        # Date + title — look in ±2000 chars window
+        window = html_text[max(0, m.start()-200):m.start()+3000]
+        m_date = re.search(
+            r'(\d{1,2})\s+(janv|fév|fev|mars|avr|mai|juin|juil|août|aout|sept|oct|nov|déc|dec)\w*\s+(\d{4})',
+            window, re.IGNORECASE,
+        )
+        if not m_date:
+            continue
+        day = m_date.group(1).zfill(2)
+        mon = MONTH_MAP.get(m_date.group(2).lower(), None)
+        if not mon: continue
+        year = m_date.group(3)
+        sale_date = f"{year}-{mon}-{day}"
+        # Keyword filter — keep Asian / Vietnam / Indochine sales only
+        title_candidate = _slug_title(slug)
+        if not _has_keyword(slug) and not _has_keyword(title_candidate.lower()):
+            continue
+        seen.add(vid)
+        full = f"https://www.millon.com/catalogue/{vid}-{slug}"
+        out.append({
+            "source": "millon",
+            "sale_page_url": full,
+            "auction_title": title_candidate[:120],
+            "sale_date": sale_date,
+            "sale_location": "Paris",
+        })
+    return out
+
+
 def fetch_aguttes():
     """Aguttes future Peintres d'Asie sales.
 
@@ -302,6 +368,7 @@ def main():
         ("aguttes",   fetch_aguttes),
         ("bonhams",   fetch_bonhams),
         ("phillips",  fetch_phillips),
+        ("millon",    fetch_millon),
     )
     all_rows = []
     for name, fn in fetchers:

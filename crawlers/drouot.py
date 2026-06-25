@@ -66,6 +66,26 @@ VN_SEARCH_KEYWORDS = [
     "tonkin",
     "saigon",
     "hanoi",
+    # Narrow artist-name keywords — operator-prioritized.  Adds sales
+    # that don't mention 'Vietnam' in title (Pandolfini "Asian Art" /
+    # Roldan "Modern Contemporary" etc. often have VN lots hidden
+    # inside a non-VN-flagged sale title).  Each artist = one search
+    # call; cheap.
+    "le pho",
+    "le ba dang",
+    "lebadang",
+    "diem phung thi",
+    "henri mege",
+    "mai trung thu",
+    "mai thu",
+    "vu cao dam",
+    "nguyen gia tri",
+    "bui xuan phai",
+    "pham hau",
+    "nguyen tu nghiem",
+    "alix ayme",
+    "joseph inguimberty",
+    "victor tardieu",
 ]
 
 # Auctioneer slugs already covered by their own Artonis crawler. Drouot re-lists
@@ -895,10 +915,11 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
         sale_title_full = sale_info.get("title", "").strip() or "Drouot Asian Art Sale"
         # Normalise &amp; HTML entities in sale title
         sale_title_full = _html.unescape(sale_title_full)
-        auctioneer_name = sale_info.get("auctioneer_name") or ""
-        auction_title = f"Drouot — {sale_title_full}"
-        if auctioneer_name:
-            auction_title += f" ({auctioneer_name})"
+        # Use the real sale title as-is.  The auctioneer name lives in
+        # sale_location / source already; appending it here clutters
+        # display ('Asian Art | Oriental Art (Pandolfini)' →
+        # 'Asian Art | Oriental Art' is what users expect).
+        auction_title = sale_title_full
 
         # Watchlist: record this sale for future re-fetch (idempotent).
         # If sale_date is past + we found result lots, mark resolved at the end.
