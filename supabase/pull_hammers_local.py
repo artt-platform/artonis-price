@@ -639,6 +639,35 @@ FX = {
 }
 
 
+def _process_sothebys_direct(rows: list[dict], probe: bool) -> None:
+    """Pure-requests flow: no Playwright, no Chrome window.
+    Each lot: GET lot_url → extract lotId → POST GraphQL with Bearer.
+    """
+    bearer = os.environ["SOTHEBYS_BEARER"].strip()
+    n_ok = n_fail = 0
+    for i, row in enumerate(rows, 1):
+        url = row["source_url"]
+        print(f"\n  [{i}/{len(rows)}] {row['artist_name_raw']} | {(row.get('artwork_title') or '')[:50]}")
+        print(f"      URL: {url[-80:]}")
+        amt, cur = _sothebys_direct_request(url, bearer, probe=probe, source_label="sothebys")
+        if amt is None:
+            n_fail += 1
+        else:
+            print(f"      ✓ hammer = {cur} {amt:,.0f}")
+            if patch_hammer(row["id"], amt, cur, FX):
+                n_ok += 1
+            else:
+                print("      ✗ DB patch failed")
+                n_fail += 1
+        # Lighter rate-limit for direct path — no browser startup, just
+        # 2 small HTTP calls.  Still polite.
+        if i < len(rows):
+            sleep_s = random.uniform(8, 15) if not probe else 1
+            print(f"      ... sleep {sleep_s:.0f}s")
+            time.sleep(sleep_s)
+    print(f"\n  [sothebys] done: {n_ok} OK, {n_fail} failed")
+
+
 def process_source(source: str, cookie: str, domain: str,
                    parse_fn, limit: int, probe: bool) -> None:
     if not cookie:
@@ -650,6 +679,13 @@ def process_source(source: str, cookie: str, domain: str,
         print(f"  [{source}] no lots missing hammer — skip")
         return
     print(f"  [{source}] {len(rows)} lots queued")
+
+    # Sothebys with SOTHEBYS_BEARER → fully direct (no Playwright).
+    # Skips the Chrome window entirely.  Falls back to Playwright only
+    # if Bearer is absent.
+    if source == "sothebys" and os.environ.get("SOTHEBYS_BEARER", "").strip():
+        _process_sothebys_direct(rows, probe=probe)
+        return
 
     from playwright.sync_api import sync_playwright
     # Sothebys's backend returns ResultHidden when it detects automation
