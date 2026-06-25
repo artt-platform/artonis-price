@@ -1,0 +1,30 @@
+name: Test logged-in cookies (Sothebys + Invaluable)
+
+# Manual-trigger only.  Verifies that SOTHEBYS_COOKIE and
+# INVALUABLE_COOKIE secrets are wired and that the cookies actually
+# unlock the hammer prices.  Once we know what real hammers look
+# like in the response, we build the real per-source crawlers.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install deps
+        run: pip install cloudscraper requests
+
+      - name: Run test
+        env:
+          SOTHEBYS_COOKIE: ${{ secrets.SOTHEBYS_COOKIE }}
+          INVALUABLE_COOKIE: ${{ secrets.INVALUABLE_COOKIE }}
+        run: python3 crawlers/test_logged_in_cookies.py
