@@ -24,8 +24,12 @@ def fetch(url: str, cookie: str | None, label: str) -> None:
     if not cookie:
         print(f"--- {label}: NO COOKIE in env ---")
         return
+    # Strip leading / trailing whitespace + newlines that often sneak in
+    # when pasting into GitHub Secrets.  Internal newlines are likewise
+    # collapsed — a Cookie header can't contain raw newlines (HTTP spec).
+    cookie = " ".join(cookie.split()).strip()
     print(f"--- {label}: fetching {url} ---")
-    print(f"    cookie length: {len(cookie)} chars")
+    print(f"    cookie length: {len(cookie)} chars (cleaned)")
     s = cloudscraper.create_scraper()
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
