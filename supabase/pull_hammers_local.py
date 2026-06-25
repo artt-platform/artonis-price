@@ -301,75 +301,102 @@ def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sot
     """
     import json as _json
 
-    # Path B: catch Sothebys's own GraphQL response if it fires
-    captured_gql = {"json": None, "url": None}
+    # Path B: collect ALL graphql responses (Sothebys fires multiple
+    # operations: LotQuery, UserBidQuery, etc) and any Bearer carried
+    # in the Authorization header of an outgoing request.
+    captured = {"responses": [], "bearer": None}
+
+    def on_request(req):
+        if captured["bearer"] is not None:
+            return
+        if "clientapi.prod.sothelabs.com" in req.url:
+            auth = req.headers.get("authorization") or req.headers.get("Authorization")
+            if auth and auth.lower().startswith("bearer "):
+                captured["bearer"] = auth[7:]
 
     def on_response(resp):
-        if captured_gql["json"] is not None:
+        if "clientapi.prod.sothelabs.com/graphql" not in resp.url:
             return
-        if "clientapi.prod.sothelabs.com/graphql" in resp.url:
-            try:
-                ctype = resp.headers.get("content-type", "")
-                if "json" not in ctype.lower():
-                    return
-                txt = resp.text()
-                data = _json.loads(txt)
-                # Only keep if the response has the hammer-bearing shape
-                if isinstance(data, dict):
-                    captured_gql["json"] = data
-                    captured_gql["url"] = resp.url
-            except Exception:
-                pass
+        try:
+            ctype = resp.headers.get("content-type", "")
+            if "json" not in ctype.lower():
+                return
+            txt = resp.text()
+            data = _json.loads(txt)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        # Tag with the operation name from the request if possible
+        op = None
+        try:
+            req = resp.request
+            if req:
+                post = req.post_data or ""
+                m_op = re.search(r'"operationName"\s*:\s*"([^"]+)"', post)
+                if m_op:
+                    op = m_op.group(1)
+        except Exception:
+            pass
+        captured["responses"].append({"op": op, "data": data, "url": resp.url})
 
+    page.on("request", on_request)
     page.on("response", on_response)
 
     try:
         page.goto(lot_url, timeout=30_000, wait_until="domcontentloaded")
-        # Auth0 SDK exchanges cookie for token shortly after load.
-        # In headed Chrome the SDK runs fully; in headless it often
-        # skips.  10s window lets the page settle either way.
         page.wait_for_timeout(10_000)
     except Exception as e:
         print(f"      ✗ goto failed: {type(e).__name__}: {str(e)[:80]}")
+        try: page.remove_listener("request", on_request)
+        except Exception: pass
         try: page.remove_listener("response", on_response)
         except Exception: pass
         return None, None
 
-    # Path B early-return: did Sothebys's own JS deliver the hammer?
-    if captured_gql["json"] is not None:
-        if probe:
-            print(f"      ✓ captured Sothebys's own GraphQL response from {captured_gql['url']}")
-        try:
-            r = _parse_sothebys_graphql_response(captured_gql["json"])
-            if r[0] is not None:
-                if probe:
-                    sample = ROOT / f"sample_{source_label}_graphql.json"
-                    sample.write_text(_json.dumps(captured_gql["json"], indent=2, ensure_ascii=False))
-                    print(f"      ◆ graphql JSON written to {sample}")
-                try: page.remove_listener("response", on_response)
-                except Exception: pass
-                return r
-        except Exception as e:
-            if probe:
-                print(f"      ⓘ Sothebys-response path returned but parse failed: {e}; trying Bearer path")
-
+    try: page.remove_listener("request", on_request)
+    except Exception: pass
     try: page.remove_listener("response", on_response)
     except Exception: pass
 
+    if probe:
+        print(f"      captured {len(captured['responses'])} graphql response(s)")
+        for r in captured["responses"]:
+            print(f"        - op={r['op']}")
+        print(f"      bearer captured: {'yes' if captured['bearer'] else 'no'}")
+
+    # Try parsing every captured response for hammer — first match wins
+    for r in captured["responses"]:
+        amt, cur = _parse_sothebys_graphql_response(r["data"])
+        if amt is not None:
+            if probe:
+                sample = ROOT / f"sample_{source_label}_graphql_{r['op'] or 'unknown'}.json"
+                sample.write_text(_json.dumps(r["data"], indent=2, ensure_ascii=False))
+                print(f"      ✓ hammer found in op={r['op']}, saved to {sample.name}")
+            return amt, cur
+
+    # No captured response had a hammer.  If we DO have a bearer, fire
+    # our own minimal LotHammer query as a last resort.
+    if probe and captured["responses"]:
+        # Dump them all so we can inspect shapes
+        for i, r in enumerate(captured["responses"], 1):
+            sample = ROOT / f"sample_{source_label}_graphql_{i}_{r['op'] or 'unknown'}.json"
+            sample.write_text(_json.dumps(r["data"], indent=2, ensure_ascii=False))
+        print(f"      ◆ no hammer parsed; all {len(captured['responses'])} responses dumped for inspection")
+
+    bearer = captured["bearer"]
+
     # Path A: extract Bearer + call GraphQL ourselves
-    bearer = _extract_sothebys_bearer(page)
+    # Bearer: prefer the one captured from outgoing requests (real
+    # token, runtime-issued).  Only fall back to localStorage scan if
+    # we didn't observe one — but Sothebys uses Auth0 memory mode so
+    # localStorage will normally be empty.
     if not bearer:
-        if probe:
-            # Diagnostic: dump available storage keys
-            try:
-                storage_dump = page.evaluate(
-                    "() => ({ ls: Object.keys(localStorage), ss: Object.keys(sessionStorage) })"
-                )
-                print(f"      diagnostic storage keys: {storage_dump}")
-            except Exception:
-                pass
-        print("      ✗ no Bearer found AND no graphql response captured")
-        print("        Likely: page rendered headless (Auth0 SDK skipped) or cookie expired")
+        bearer = _extract_sothebys_bearer(page)
+    if not bearer:
+        print("      ✗ no Bearer captured AND no graphql response had a hammer")
+        print("        Sothebys's auth0 SDK appears to have skipped under Playwright.")
+        print("        Try opening the lot once in normal Chrome first to refresh cookies.")
         return None, None
     if probe:
         print(f"      bearer: {bearer[:40]}…{bearer[-20:]}")
