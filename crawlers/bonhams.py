@@ -16,6 +16,25 @@ HEADERS = {
     "user-agent": "Mozilla/5.0",
 }
 
+_OG_IMAGE_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"', re.IGNORECASE)
+
+
+def _fetch_og_image(source_url: str) -> str:
+    """Fetch the Bonhams lot page and return the og:image URL.
+    Typesense documents don't carry image fields, so we make one extra
+    GET per lot.  Adds ~0.5s/lot but Bonhams sales are small (50-200 lots),
+    so the overall crawl impact is bounded."""
+    if not source_url:
+        return ""
+    try:
+        r = requests.get(source_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+    except Exception:
+        return ""
+    if r.status_code != 200:
+        return ""
+    m = _OG_IMAGE_RE.search(r.text)
+    return m.group(1).strip().replace("&amp;", "&") if m else ""
+
 # Keywords that indicate a fake, copy, print, or attributed-to-but-not-authentic work
 FAKE_MARKERS = [
     "d'après", "d'apres", "après", "apres",      # after = copy
@@ -369,6 +388,7 @@ def parse_lot(doc):
         w, h, area, _ = parse_dim(dimensions, source="bonhams")
         if w:
             width_cm, height_cm, area_m2 = w, h, area
+    image_url = _fetch_og_image(source_url)
     return {
         "source": "bonhams",
         "source_url": source_url,
@@ -394,6 +414,7 @@ def parse_lot(doc):
         "currency": currency,
         "status": doc.get("status", "").lower(),
         "provenance": provenance,
+        "image_url": image_url or None,
         "raw_snapshot": title_full[:500],
         "birth_year": birth_year,
         "death_year": death_year,

@@ -41,25 +41,33 @@ def _strip_html_lib(s):
 
 def _fetch_lot_page_fields(lot_url):
     """Fetch an Aguttes lot detail HTML and parse __NEXT_DATA__.dynamic_fields.fr.
-    Returns (artwork_title, provenance, expertise).
+    Returns (artwork_title, provenance, expertise, image_url).
 
     Title sources, in priority:
       1. dynamic_fields.fr.sub_title (clean HTML <p>title</p>)
       2. description's line-after-artist-header (handles 'ARTIST (né en YYYY)' format)
+
+    image_url comes from <meta property="og:image"> — Aguttes serves
+    the same artisio.co CDN URL the browser uses.
     """
     try:
         r = requests.get(lot_url, headers=_LOT_PAGE_HEADERS, timeout=20)
     except Exception:
-        return "", "", ""
+        return "", "", "", ""
     if r.status_code != 200:
-        return "", "", ""
+        return "", "", "", ""
+    # og:image — independent of the JSON, so grab it before any parse fail
+    image_url = ""
+    m_img = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', r.text)
+    if m_img:
+        image_url = m_img.group(1).strip().replace("&amp;", "&")
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.+?)</script>', r.text, re.DOTALL)
     if not m:
-        return "", "", ""
+        return "", "", "", image_url
     try:
         data = json.loads(m.group(1))
     except Exception:
-        return "", "", ""
+        return "", "", "", image_url
     df = data.get("props", {}).get("pageProps", {}).get("lot", {}).get("dynamic_fields", {}) or {}
     fr = df.get("fr", {}) if isinstance(df, dict) else {}
 
@@ -97,7 +105,7 @@ def _fetch_lot_page_fields(lot_url):
         if m_p:
             provenance = m_p.group(1).strip()
     expertise = _strip_html_lib(fr.get("expertise_information") or "")
-    return title, provenance[:2000], expertise[:2000]
+    return title, provenance[:2000], expertise[:2000], image_url
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -483,7 +491,7 @@ def crawl(conn, verbose=True, filter_vn=True):
                 # API list-call gives only artist header in `title`; lot page is the source of truth.
                 # ALWAYS prefer page_title (canonical sub_title) over desc-parsed title — desc
                 # parsing sometimes yields fragments of the medium line (e.g. "Encre et couleurs sur").
-                page_title, page_provenance, _expertise = _fetch_lot_page_fields(lot_url)
+                page_title, page_provenance, _expertise, page_image = _fetch_lot_page_fields(lot_url)
                 if page_title:
                     artwork_title = page_title
 
@@ -526,6 +534,7 @@ def crawl(conn, verbose=True, filter_vn=True):
                     "currency": currency,
                     "status": "sold",
                     "provenance": page_provenance,
+                    "image_url": page_image or None,
                     "raw_snapshot": (title_fr + " | " + _strip_html(desc_fr)[:300])[:500],
                 }
                 # Pace lot-page fetches to avoid rate-limiting Aguttes
