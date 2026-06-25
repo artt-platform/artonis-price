@@ -94,6 +94,15 @@ def fetch_missing_hammers(source: str, limit: int) -> list[dict]:
     return r.json() if r.ok else []
 
 
+def _mark_invaluable_unsold(row_id: int) -> bool:
+    """Mark a lot as unsold so the puller stops re-checking it.
+    Used when Invaluable reports Passed/Withdrawn."""
+    r = requests.patch(f"{URL}/rest/v1/sale_results",
+                       params={"id": f"eq.{row_id}"},
+                       headers=H, json={"status": "unsold"}, timeout=10)
+    return r.status_code < 300
+
+
 def patch_hammer(row_id: int, hammer: float, currency: str, fx: dict) -> bool:
     fx_to_usd = fx.get(currency.upper(), 1.0)
     price_usd = round(hammer * fx_to_usd, 2)
@@ -608,8 +617,44 @@ INVALUABLE_CURRENCY_PATTERNS = [
 ]
 
 
-def _parse_invaluable_hammer(html: str) -> tuple[float | None, str | None]:
-    # Find sold amount first
+_INVALUABLE_PASSED_RE = re.compile(r'\b(?:Passed|Withdrawn|Unsold|Reserve\s+Not\s+Met|Not\s+Sold)\b')
+_INVALUABLE_CURRENT_BID_RE = re.compile(r'"currentBid"\s*:\s*([\d.]+|null)')
+_INVALUABLE_CF_RE = re.compile(r'Just\s+a\s+moment|Checking\s+if\s+the\s+site\s+connection', re.IGNORECASE)
+
+
+def _parse_invaluable_hammer(html: str) -> tuple[float | None, str | None, str]:
+    """Returns (amount, currency, status).
+    status ∈ {sold, passed, cf_challenge, unknown}.
+    Caller decides what to write — only 'sold' updates hammer_price.
+    """
+    # Detect Cloudflare challenge page first — short body + 'Just a moment'
+    if _INVALUABLE_CF_RE.search(html) or len(html) < 50_000:
+        return None, None, "cf_challenge"
+
+    # Detect Passed/Withdrawn lots — soldAmount might be the reserve,
+    # not the realized price, so we'd write a fake hammer otherwise.
+    if _INVALUABLE_PASSED_RE.search(html):
+        return None, None, "passed"
+
+    # Real-sold guard: soldAmount and currentBid must match (when both
+    # are present).  For sold lots they're equal; for passed lots
+    # currentBid < soldAmount (reserve).
+    sold_match = INVALUABLE_HAMMER_PATTERNS[0].search(html)  # soldAmount
+    if sold_match:
+        try:
+            sold_amt = float(sold_match.group(1))
+        except (ValueError, TypeError):
+            sold_amt = None
+        cb_match = _INVALUABLE_CURRENT_BID_RE.search(html)
+        if cb_match and cb_match.group(1) != "null":
+            try:
+                cb = float(cb_match.group(1))
+                if sold_amt and abs(cb - sold_amt) / sold_amt > 0.05:
+                    # 5%+ mismatch — likely Passed without explicit label
+                    return None, None, "passed"
+            except (ValueError, TypeError):
+                pass
+
     amt = None
     for pat in INVALUABLE_HAMMER_PATTERNS:
         m = pat.search(html)
@@ -622,13 +667,13 @@ def _parse_invaluable_hammer(html: str) -> tuple[float | None, str | None]:
             except (ValueError, IndexError):
                 continue
     if amt is None:
-        return None, None
+        return None, None, "unknown"
     # Currency
     for pat in INVALUABLE_CURRENCY_PATTERNS:
         m = pat.search(html)
         if m and m.group(1) in {"USD","EUR","GBP","HKD","CAD","AUD","SGD","CHF","JPY","CNY","MYR","THB"}:
-            return amt, m.group(1)
-    return amt, "USD"  # safe default
+            return amt, m.group(1), "sold"
+    return amt, "USD", "sold"
 
 
 # ─── Main ──────────────────────────────────────────────────────────
@@ -749,7 +794,21 @@ def process_source(source: str, cookie: str, domain: str,
                     print(f"      ✗ fetch failed: {type(e).__name__}: {str(e)[:80]}")
                     n_fail += 1
                     continue
-                amt, cur = parse_fn(html)
+                # Invaluable parser returns 3-tuple with explicit status
+                if source == "invaluable":
+                    amt, cur, lot_status = _parse_invaluable_hammer(html)
+                    if lot_status == "passed":
+                        print("      ⓘ lot Passed (didn't meet reserve) — marking unsold")
+                        # Mark as unsold so we stop re-checking it next run
+                        _mark_invaluable_unsold(row["id"])
+                        n_fail += 1
+                        continue
+                    if lot_status == "cf_challenge":
+                        print("      ⚠ Cloudflare challenge — skipping, retry next run")
+                        n_fail += 1
+                        continue
+                else:
+                    amt, cur = parse_fn(html)
 
             if amt is None:
                 if source != "sothebys":
