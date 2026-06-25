@@ -94,6 +94,22 @@ def parse_lot_description(html, name):
         if m2:
             artist = clean_text(m2.group(1))
 
+    # LLM fallback when both regex paths missed.  Millon-Vietnam
+    # occasionally publishes lots where the artist header is in prose
+    # form ("Tác phẩm của Mai Trung Thứ, danh họa trường phái Đông
+    # Dương …") that the line-based regex can't catch.  Same pattern
+    # as crawlers/drouot.py — see SPEC §10.
+    if not artist and (plain or name):
+        try:
+            from crawlers.llm_parser import llm_artist_fallback
+            a, _t, by, dy = llm_artist_fallback(plain or "", raw_title=name or "")
+            if a:
+                artist = a
+                if by and not birth_year: birth_year = by
+                if dy and not death_year: death_year = dy
+        except Exception:
+            pass
+
     # Title extraction — in order of preference:
     # (a) <h3> element in description (Millon sometimes renders titles here)
     # (b) 1st line after artist header that isn't a medium/dimension/signature

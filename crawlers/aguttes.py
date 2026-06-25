@@ -119,10 +119,15 @@ def _i18n(field, lang="fr"):
     return field or ""
 
 
-def _parse_artist_and_years(title_html):
+def _parse_artist_and_years(title_html, description_html=None):
     """Title HTML is like '<p>Lê Phổ&nbsp;(1907 - 2001)</p>'. Returns (artist, b, d).
     Vietnamese names use diacritics (đ, ổ, ấ, ữ, ...) outside Latin-1 — accept any non-ASCII letter.
-    Also tolerates Aguttes typos like 'ALIX AYME ( (1894 - 1989)' (double-open-paren)."""
+    Also tolerates Aguttes typos like 'ALIX AYME ( (1894 - 1989)' (double-open-paren).
+
+    When the paren-year regex misses AND a description is supplied, fall
+    back to Claude Haiku via crawlers.llm_parser.llm_artist_fallback.
+    Same pattern as crawlers/drouot.py — see SPEC §10 LLM fallback layer.
+    """
     plain = _strip_html(title_html)
     # Normalise extra whitespace + collapse "( (" → "("
     plain = re.sub(r"\(\s+\(", "(", plain)
@@ -135,6 +140,19 @@ def _parse_artist_and_years(title_html):
         artist = re.sub(r"^(entourage de|atelier de|école de|attribué à|d'?après|after)\s+",
                         "", artist, flags=re.IGNORECASE).strip()
         return artist, int(m.group(2)), int(m.group(3)) if m.group(3) else None
+    # No paren-year — try LLM fallback if description is available.
+    # Aguttes occasionally publishes titles in free-form prose (no paren)
+    # for new artists; LLM extracts artist + birth/death from the rich
+    # bilingual catalog description.
+    if description_html:
+        try:
+            from crawlers.llm_parser import llm_artist_fallback
+            desc_plain = _strip_html(description_html)
+            a, _t, by, dy = llm_artist_fallback(desc_plain, raw_title=plain)
+            if a:
+                return a, by, dy
+        except Exception:
+            pass
     return clean_text(plain), None, None
 
 
@@ -425,7 +443,7 @@ def crawl(conn, verbose=True, filter_vn=True):
                 if _FAKE_PREFIX_RE.match(title_plain):
                     continue
 
-                artist, b_yr, d_yr = _parse_artist_and_years(title_fr)
+                artist, b_yr, d_yr = _parse_artist_and_years(title_fr, description_html=desc_fr)
                 if not artist:
                     continue
                 # Strip variant suffixes (Né en, XXe, *, slash-years) so future inserts merge
