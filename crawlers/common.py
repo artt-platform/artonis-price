@@ -11,7 +11,8 @@ from artonis_price_mvp import (
 )
 
 __all__ = ["parse_amount", "parse_date", "insert_sale_result", "to_usd", "clean_text",
-           "FX_TO_USD", "clean_artist_name", "log_crawl_run"]
+           "FX_TO_USD", "clean_artist_name", "log_crawl_run",
+           "derive_lot_fields", "manual_import_lot"]
 
 
 def log_crawl_run(conn, source, target_slug=None, started_at=None, finished_at=None,
@@ -516,40 +517,49 @@ MEDIUM_TEXT_RE = re.compile(
 )
 
 
-def insert_sale_result(conn, record):
-    """Upsert a sale_result row. record must contain at minimum: source, source_url, artist_name_raw.
-    artist_id is resolved via upsert_artist if artist_name_raw is provided.
+def derive_lot_fields(record: dict, *, artist_id: int | None = None) -> tuple[dict | None, bool]:
+    """Pure derivation pipeline shared by `insert_sale_result()` (SQLite
+    crawler path) and `manual_import_lot()` (Supabase-direct path).
 
-    UNIVERSAL gate: reject 'attributed to' / 'after X' / 'circle of' /
-    'd'après' / workshop / atelier / school-of lots BEFORE upsert.
-    These aren't the confirmed artist's work and would skew the
-    per-artist median.  Rule documented in SPEC §13.  Same gate from
-    here covers every crawler — even ones that forget to filter.
+    Takes a loose record dict (whatever the crawler / user supplied) and
+    returns `(derived, rejected)` where:
+      - `derived` is a dict with the 9 computed fields ready to merge
+        into the INSERT/POST payload:
+          artist_id, kind, width_cm, height_cm, area_m2,
+          price_usd, price_with_premium_usd, price_per_m2_usd,
+          support_type
+      - `rejected` is True when the UNIVERSAL attribution gate
+        ('after X' / 'circle of X' / 'd'après' / atelier / school-of /
+        attributed-to) fires.  Caller MUST NOT write the row when True.
+
+    artist_id is passed in by the caller — `insert_sale_result()`
+    resolves it via `upsert_artist()` against SQLite; `manual_import_lot()`
+    queries Supabase REST.  Either way, this helper stays storage-agnostic.
+
+    Rule documented in SPEC §13.  Same gate covers every crawler AND
+    every manual import — even ones that forget to filter.
     """
     from crawlers.parsers import is_attribution
     if is_attribution(
         record.get("source_url", ""),
         (record.get("artwork_title", "") or "") + " " + (record.get("artist_name_raw", "") or ""),
     ):
-        return None
-
-    artist_id = None
-    if record.get("artist_name_raw"):
-        artist_id = upsert_artist(conn, record["artist_name_raw"])
+        return None, True
 
     dims = record.get("dimensions", "")
     # Pass description + dimensions so the classifier can flip sculpture
     # when 3D markers are present (single-axis 'H 50.5 cm', 'sans le socle',
     # 'patiné').  Without these, lot 7933 (Lebadang 'Personnage', H 50.5 cm,
     # 'mixed media on wood', 'sans le socle') falls back to 'painting' every
-    # time the cron re-inserts.  User has had to re-flip this 3+ times.
+    # time the cron re-inserts.
     kind = classify_kind(
         record.get("medium", ""),
         description=(record.get("catalog_description") or record.get("raw_snapshot", "")),
         dimensions=dims,
     )
-    # Sculptures don't have meaningful 2D area — keep w/h pairs as parsed but null out area+ppm
-    # Prints/drawings/medals get dim+area kept but $/m² nulled later (different market).
+    # Sculptures don't have meaningful 2D area — keep h as parsed but null
+    # out width + area.  Prints/drawings/medals keep dim+area but $/m² null
+    # later (different market segment).
     w, h, area, _ = compute_area_and_price_per_m2(
         dims, record.get("hammer_price") or 0, source=record.get("source"),
     )
@@ -562,11 +572,10 @@ def insert_sale_result(conn, record):
         price_usd, _ = to_usd(record.get("price_with_premium"), record.get("currency", "EUR"))
     # Price with buyer's premium in USD (what buyer actually paid)
     premium_usd, _ = to_usd(record.get("price_with_premium"), record.get("currency", "EUR"))
-    # If house didn't supply explicit premium-included price, derive from hammer × source's premium rate
+    # If house didn't supply explicit premium-included price, derive from
+    # hammer × source's premium rate (from data/auction_houses.py).
     if premium_usd is None and price_usd is not None:
         try:
-            import sys
-            from pathlib import Path
             sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "data"))
             from auction_houses import AUCTION_HOUSES
             rate = (AUCTION_HOUSES.get(record.get("source", "")) or {}).get("premium_rate_pct", 25.0)
@@ -574,13 +583,43 @@ def insert_sale_result(conn, record):
         except Exception:
             premium_usd = None
     # $/m² uses premium-inclusive price (the "real" price buyer paid).
-    # Sculptures/prints/drawings/medals: $/m² doesn't reflect market value → set None.
+    # Sculptures / prints / drawings / medals → $/m² null (wrong market).
     ppm_basis = premium_usd if premium_usd is not None else price_usd
     ppm_usd = round(ppm_basis / area, 2) if (ppm_basis and area) else None
     if kind in ("print", "drawing", "medal", "sculpture"):
         ppm_usd = None
 
     support_type = detect_support_type(record.get("medium", ""), record.get("artwork_title", ""))
+
+    return {
+        "artist_id": artist_id,
+        "kind": kind,
+        "width_cm": w,
+        "height_cm": h,
+        "area_m2": area,
+        "price_usd": price_usd,
+        "price_with_premium_usd": premium_usd,
+        "price_per_m2_usd": ppm_usd,
+        "support_type": support_type,
+    }, False
+
+
+def insert_sale_result(conn, record):
+    """SQLite path: upsert a sale_result row.  Used by every crawler.
+
+    Record must contain at minimum: source, source_url, artist_name_raw.
+    artist_id is resolved via `upsert_artist()` against the local SQLite
+    `artists` table; derivation runs through `derive_lot_fields()` so the
+    same logic covers both SQLite and Supabase-direct (manual_import_lot)
+    write paths.
+    """
+    artist_id = None
+    if record.get("artist_name_raw"):
+        artist_id = upsert_artist(conn, record["artist_name_raw"])
+
+    derived, rejected = derive_lot_fields(record, artist_id=artist_id)
+    if rejected:
+        return None
 
     conn.execute(
         """
@@ -601,26 +640,136 @@ def insert_sale_result(conn, record):
             record.get("auction_title", ""),
             record.get("sale_date", ""),
             record.get("sale_location", ""),
-            artist_id,
+            derived["artist_id"],
             record.get("artist_name_raw", ""),
             record.get("artwork_title", ""),
             record.get("medium", ""),
-            dims,
-            w, h, area,
+            record.get("dimensions", ""),
+            derived["width_cm"], derived["height_cm"], derived["area_m2"],
             record.get("year", ""),
             record.get("estimate_low"),
             record.get("estimate_high"),
             record.get("hammer_price"),
             record.get("price_with_premium"),
             record.get("currency", ""),
-            price_usd,
-            premium_usd,
-            ppm_usd,
+            derived["price_usd"],
+            derived["price_with_premium_usd"],
+            derived["price_per_m2_usd"],
             record.get("status", "sold"),
             record.get("provenance", ""),
             record.get("raw_snapshot", ""),
             now_iso(),
-            kind,
-            support_type,
+            derived["kind"],
+            derived["support_type"],
         ),
     )
+
+
+def _load_env_var(key: str) -> str | None:
+    """Read a key from `.env.local` at the repo root.  Used by manual_import_lot
+    when SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY aren't set in the environment.
+    """
+    env_path = Path(__file__).resolve().parent.parent / ".env.local"
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text().splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
+def manual_import_lot(record: dict, *,
+                      supabase_url: str | None = None,
+                      supabase_key: str | None = None) -> dict:
+    """Supabase-direct path: push one lot straight to remote Postgres.
+
+    Use this for one-off imports that DON'T flow through a crawler:
+      - User-supplied screenshots of auction watched-lots
+      - Hand-curated pricelists
+      - Backfills from external CSV / XLSX
+
+    Pipeline mirrors `insert_sale_result()` exactly: same attribution
+    gate, same derivation via `derive_lot_fields()`, same fields written.
+    The ONLY difference is target storage — REST POST to Supabase rather
+    than SQLite INSERT OR REPLACE.
+
+    Resolves `artist_id` via Supabase `artists.normalized_name` lookup
+    (the local SQLite upsert_artist would touch the wrong DB).
+
+    Returns the Supabase row dict on success (`{id, source, …}`).
+    Raises ValueError on attribution rejection.
+    Raises HTTPError on Supabase REST failure.
+
+    The Postgres trigger added 2026-06-25 (migration
+    20260625000000_derived_dim_trigger.sql) ALSO fills derived fields
+    server-side — this Python derivation guarantees the values ALSO
+    pass the universal attribution gate + classify_kind + support_type
+    logic that the trigger can't run.
+    """
+    import os
+    import requests as _req
+
+    url = supabase_url or os.environ.get("SUPABASE_URL") or _load_env_var("SUPABASE_URL")
+    key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or _load_env_var("SUPABASE_SERVICE_ROLE_KEY")
+    if not url or not key:
+        raise RuntimeError("manual_import_lot needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY "
+                           "(env vars, .env.local, or explicit args)")
+    headers = {"apikey": key, "Authorization": f"Bearer {key}",
+               "Content-Type": "application/json", "Prefer": "return=representation"}
+
+    # Resolve artist_id from Supabase artists table.
+    artist_id: int | None = None
+    if record.get("artist_name_raw"):
+        from artonis_price_mvp import normalize_key
+        norm = normalize_key(record["artist_name_raw"])
+        if norm:
+            r = _req.get(f"{url}/rest/v1/artists?normalized_name=eq.{norm}&select=id",
+                         headers=headers, timeout=10)
+            if r.ok and r.json():
+                artist_id = r.json()[0]["id"]
+
+    derived, rejected = derive_lot_fields(record, artist_id=artist_id)
+    if rejected:
+        raise ValueError(
+            f"manual_import_lot: attribution gate rejected lot "
+            f"{record.get('source_url') or record.get('artwork_title')!r}"
+        )
+
+    payload = {
+        "source": record.get("source", ""),
+        "via_platform": record.get("via_platform"),
+        "source_url": record.get("source_url", ""),
+        "sale_page_url": record.get("sale_page_url", ""),
+        "lot_number": record.get("lot_number", ""),
+        "auction_title": record.get("auction_title", ""),
+        "sale_date": record.get("sale_date") or None,   # PG date col rejects ""
+        "sale_location": record.get("sale_location", ""),
+        "artist_id": derived["artist_id"],
+        "artist_name_raw": record.get("artist_name_raw", ""),
+        "artwork_title": record.get("artwork_title", ""),
+        "medium": record.get("medium", ""),
+        "dimensions": record.get("dimensions", ""),
+        "width_cm": derived["width_cm"],
+        "height_cm": derived["height_cm"],
+        "area_m2": derived["area_m2"],
+        "year": record.get("year") or None,
+        "estimate_low": record.get("estimate_low"),
+        "estimate_high": record.get("estimate_high"),
+        "hammer_price": record.get("hammer_price"),
+        "price_with_premium": record.get("price_with_premium"),
+        "currency": record.get("currency", ""),
+        "price_usd": derived["price_usd"],
+        "price_with_premium_usd": derived["price_with_premium_usd"],
+        "price_per_m2_usd": derived["price_per_m2_usd"],
+        "status": record.get("status", "sold"),
+        "provenance": record.get("provenance", ""),
+        "raw_snapshot": record.get("raw_snapshot", ""),
+        "kind": derived["kind"],
+        "support_type": derived["support_type"],
+    }
+    r = _req.post(f"{url}/rest/v1/sale_results", headers=headers, json=payload, timeout=20)
+    if not r.ok:
+        raise _req.HTTPError(
+            f"Supabase insert failed: {r.status_code} {r.text[:400]}"
+        )
+    return r.json()[0]
