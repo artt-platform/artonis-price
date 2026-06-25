@@ -37,15 +37,24 @@ H = {"apikey": KEY, "Authorization": f"Bearer {KEY}",
 
 
 OG_IMAGE_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"', re.IGNORECASE)
+# Christies serves a high-res LotImages URL inline (no og:image)
+CHRISTIES_IMG_RE = re.compile(r'(https://www\.christies\.com/img/LotImages/[^"\'\s]+\.(?:jpg|jpeg|png))', re.IGNORECASE)
 
 
-def fetch_og_image(url: str) -> str | None:
+def fetch_og_image(url: str, source: str = "") -> str | None:
+    # Skip Millon-Vietnam mirror (not the canonical millon.com VN dept)
+    if "millon-vietnam.com" in url:
+        return None
     try:
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
     except Exception:
         return None
     if r.status_code != 200:
         return None
+    # Christies path: no og:image, but img URLs are in plain markup
+    if source == "christies":
+        m = CHRISTIES_IMG_RE.search(r.text)
+        return m.group(1) if m else None
     m = OG_IMAGE_RE.search(r.text)
     if not m:
         return None
@@ -81,7 +90,7 @@ def process(source: str, limit: int) -> None:
     n_ok = n_skip = n_fail = 0
     for i, row in enumerate(rows, 1):
         url = row["source_url"]
-        img = fetch_og_image(url)
+        img = fetch_og_image(url, source=source)
         if not img:
             print(f"  [{i}/{len(rows)}] {row['artist_name_raw'][:30]:30s} → no og:image")
             n_fail += 1
@@ -97,14 +106,13 @@ def process(source: str, limit: int) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=["bonhams", "aguttes", "both"], default="both")
+    ap.add_argument("--source", choices=["bonhams", "aguttes", "millon", "christies", "all"], default="all")
     ap.add_argument("--limit", type=int, default=200)
     args = ap.parse_args()
 
-    if args.source in ("bonhams", "both"):
-        process("bonhams", args.limit)
-    if args.source in ("aguttes", "both"):
-        process("aguttes", args.limit)
+    sources = ("bonhams", "aguttes", "millon", "christies") if args.source == "all" else (args.source,)
+    for s in sources:
+        process(s, args.limit)
 
 
 if __name__ == "__main__":
