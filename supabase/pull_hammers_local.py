@@ -87,6 +87,9 @@ def fetch_missing_hammers(source: str, limit: int) -> list[dict]:
         "source": f"eq.{source}",
         "hammer_price": "is.null",
         "source_url": "not.is.null",
+        # Exclude lots we already know didn't sell — saves rate-limit
+        # budget for lots that might have a real hammer
+        "status": "not.in.(passed,unsold,withdrawn)",
         "order": "estimate_low.desc.nullslast,sale_date.desc.nullslast",
         "limit": str(limit),
     }
@@ -95,11 +98,11 @@ def fetch_missing_hammers(source: str, limit: int) -> list[dict]:
 
 
 def _mark_invaluable_unsold(row_id: int) -> bool:
-    """Mark a lot as unsold so the puller stops re-checking it.
-    Used when Invaluable reports Passed/Withdrawn."""
+    """Mark a lot 'passed' so the puller stops re-checking it next run.
+    'passed' is already in the schema (DB count: 1 row pre-existing)."""
     r = requests.patch(f"{URL}/rest/v1/sale_results",
                        params={"id": f"eq.{row_id}"},
-                       headers=H, json={"status": "unsold"}, timeout=10)
+                       headers=H, json={"status": "passed"}, timeout=10)
     return r.status_code < 300
 
 
