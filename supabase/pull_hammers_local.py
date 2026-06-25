@@ -387,16 +387,23 @@ def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sot
     bearer = captured["bearer"]
 
     # Path A: extract Bearer + call GraphQL ourselves
-    # Bearer: prefer the one captured from outgoing requests (real
-    # token, runtime-issued).  Only fall back to localStorage scan if
-    # we didn't observe one — but Sothebys uses Auth0 memory mode so
-    # localStorage will normally be empty.
+    # Bearer fallback chain:
+    #   1. From outgoing request (best — current SDK-issued token)
+    #   2. From localStorage (rare — Sothebys uses Auth0 memory mode)
+    #   3. From SOTHEBYS_BEARER env var (manual paste from DevTools)
     if not bearer:
         bearer = _extract_sothebys_bearer(page)
     if not bearer:
-        print("      ✗ no Bearer captured AND no graphql response had a hammer")
-        print("        Sothebys's auth0 SDK appears to have skipped under Playwright.")
-        print("        Try opening the lot once in normal Chrome first to refresh cookies.")
+        env_bearer = os.environ.get("SOTHEBYS_BEARER", "").strip()
+        if env_bearer:
+            bearer = env_bearer
+            if probe:
+                print(f"      using SOTHEBYS_BEARER from env: {bearer[:40]}…{bearer[-20:]}")
+    if not bearer:
+        print("      ✗ no Bearer available (request/storage/env all empty)")
+        print("        Workaround: paste a fresh Bearer to .env.local:")
+        print("          SOTHEBYS_BEARER=<copy from DevTools graphql request, 'authorization' header>")
+        print("        It expires ~24h — refresh when the next run fails.")
         return None, None
     if probe:
         print(f"      bearer: {bearer[:40]}…{bearer[-20:]}")
@@ -569,11 +576,10 @@ def process_source(source: str, cookie: str, domain: str,
     print(f"  [{source}] {len(rows)} lots queued")
 
     from playwright.sync_api import sync_playwright
-    # Sothebys's Auth0 SDK skips silently under headless Chrome (likely
-    # a navigator.webdriver guard).  Without the SDK, no Bearer token is
-    # issued and the GraphQL call never fires.  Run headed for Sothebys.
-    # A Chrome window will briefly appear; close it gets handled by the
-    # context manager exit.
+    # Sothebys's backend returns ResultHidden when it detects automation
+    # (navigator.webdriver, missing chrome.* objects, etc.) even with a
+    # valid logged-in cookie.  Headed mode + stealth init script gets
+    # us past the simpler checks.
     headless = (source != "sothebys")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
@@ -582,8 +588,28 @@ def process_source(source: str, cookie: str, domain: str,
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
                         "Chrome/131.0.0.0 Safari/537.36"),
             viewport={"width": 1440, "height": 900},
+            locale="en-US",
         )
         context.add_cookies(_parse_cookie_string(cookie, domain))
+        if source == "sothebys":
+            # Hide automation markers that Sothebys's backend keys on.
+            # Order matters — must run before any of Sothebys's JS loads,
+            # so attach as an init script (fires on every new document).
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [{ name: 'PDF Viewer' }, { name: 'Chrome PDF Viewer' }]
+                });
+                window.chrome = window.chrome || { runtime: {} };
+                const originalQuery = window.navigator.permissions ? window.navigator.permissions.query : null;
+                if (originalQuery) {
+                    window.navigator.permissions.query = (p) =>
+                        p && p.name === 'notifications'
+                            ? Promise.resolve({ state: Notification.permission })
+                            : originalQuery(p);
+                }
+            """)
         page = context.new_page()
 
         n_ok = n_fail = 0
