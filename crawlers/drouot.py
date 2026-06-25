@@ -550,6 +550,18 @@ def _is_vietnamese(artist_raw, vn_catalog, exclusions):
 
 _SALE_URL_RE = re.compile(r'/[a-z]{2}/v/(\d+)-([a-z0-9\-]+?)(?=[?"])')
 
+# Rendered-hammer fallback regex.  Matches the post-sale lot detail
+# layout where Drouot shows '<span>Sold</span></div><span>€X,XXX</span>'.
+# Observed 2026-06-25: Pandolfini Asian Art results appeared in
+# rendered HTML BEFORE the SvelteKit data island's `result` field was
+# updated; the data island lagged ~hours.  This regex provides a
+# second source of truth.
+_RENDERED_HAMMER_RE = re.compile(
+    r'>\s*(?:Sold|Adjug[eé])\s*</span>\s*</div>\s*'
+    r'<span[^>]*>\s*([€$£])\s*([\d.,]+)',
+    re.IGNORECASE,
+)
+
 
 def discover_asian_sales(scraper, max_pages=20, verbose=False):
     """Discover Drouot sale URLs across multiple discovery paths.
@@ -901,6 +913,34 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
                 high_est = None
 
             currency = lot.get("currencyId", "EUR") or "EUR"
+
+            # Rendered-hammer fallback: Drouot serves the result in
+            # the lot-detail HTML at '<span>Sold</span></div><span>€X
+            # ,XXX</span>' BEFORE the data island's `result` field
+            # gets updated (observed Pandolfini Asian Art 2026-06-25
+            # — Le Ba Dang lot 131: data island result=0 but page
+            # shows '€1,000' rendered).  Only attempt the extra fetch
+            # for PAST sales — pre-sale ones genuinely have no hammer.
+            if result == 0 and sale_date and sale_date <= today_iso:
+                try:
+                    rr = scraper.get(lot_url, timeout=15)
+                    rr.encoding = "utf-8"
+                    m_html = _RENDERED_HAMMER_RE.search(rr.text)
+                    if m_html:
+                        currency_sym = m_html.group(1)
+                        amt_str = m_html.group(2).replace(',', '').replace('.', '').replace(' ', '')
+                        # Drouot Italian listings use '.' as thousands sep ('€1.234'),
+                        # French use ',' — both become digits-only after strip.
+                        try:
+                            result = float(amt_str)
+                            if currency_sym == '€': currency = 'EUR'
+                            elif currency_sym == '$': currency = 'USD'
+                            elif currency_sym == '£': currency = 'GBP'
+                        except ValueError:
+                            pass
+                    time.sleep(0.2)  # gentle to Drouot
+                except Exception:
+                    pass
 
             # Status / hammer policy (2026-06-24 — pre-capture pivot):
             #   - hammer > 0      → status='sold'                  (post-sale visible)
