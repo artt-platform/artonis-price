@@ -30,11 +30,22 @@ def fetch(url: str, cookie: str | None, label: str) -> None:
     cookie = " ".join(cookie.split()).strip()
     print(f"--- {label}: fetching {url} ---")
     print(f"    cookie length: {len(cookie)} chars (cleaned)")
-    s = cloudscraper.create_scraper()
+    s = cloudscraper.create_scraper(browser={'browser':'chrome','platform':'darwin','desktop':True})
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        # Realistic Chrome on macOS — matches what the operator's
+        # browser sent when copying the cookie (avoids UA mismatch
+        # detection on Cloudflare-protected sites).
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/131.0.0.0 Safari/537.36"),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
         "Cookie": cookie,
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Upgrade-Insecure-Requests": "1",
     }
     try:
         r = s.get(url, headers=headers, timeout=30)
@@ -69,6 +80,15 @@ def fetch(url: str, cookie: str | None, label: str) -> None:
     m = re.search(r'<title>([^<]+)</title>', r.text)
     if m:
         print(f"  <title>: {m.group(1)[:120]!r}")
+
+    # If Sothebys → also try their GraphQL endpoint directly to see if
+    # the same cookie unlocks the hammer there.  Hammer for HK lots
+    # comes back from /api/getLotDetail or similar Apollo query.
+    if "sothebys.com" in url and "lot/" not in url:
+        # Try extracting the lot's internal ID from the page HTML
+        m_lid = re.search(r'"lotId"\s*:\s*"([^"]+)"', r.text)
+        if m_lid:
+            print(f"  Sothebys lotId from page: {m_lid.group(1)}")
 
 
 def main() -> None:
