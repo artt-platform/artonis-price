@@ -212,77 +212,188 @@ def _walk_json_for_hammer(obj, _key_path=""):
     return None, None
 
 
-def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sothebys"):
-    """Sothebys's hammer is loaded by a separate AJAX:
-        GET /bsp-api/lot/details?itemId={lotId}
-    The endpoint content-negotiates: it serves JSON when called as
-    XHR with Accept: application/json, and HTML otherwise.  Earlier
-    attempts caught the response *via* the page navigation context,
-    which Sothebys rendered as HTML.
+# Discovered 2026-06-25 via operator's DevTools inspection:
+# Sothebys's hammer lives in a GraphQL response from
+# https://clientapi.prod.sothelabs.com/graphql (separate subdomain!).
+# Auth is a Bearer JWT, not the cookie itself.  Cookies log us into
+# sothebys.com → Auth0 SPA SDK exchanges cookie for an access_token
+# stored in localStorage → that token is the Bearer.
+#
+# The hammer is at: data.lot.bidState.sold.premiums[].finalPriceV2.amount
+# Currency at:      data.lot.auction.currencyV2 (or auction.currency)
+SOTHEBYS_GRAPHQL_URL = "https://clientapi.prod.sothelabs.com/graphql"
 
-    Approach: load the lot page in Playwright (for cookie auth), then
-    fire fetch() *from inside the page* with explicit JSON headers.
-    The fetch runs under the page's authenticated session and ships
-    the right Accept header.
+# Minimal slice of the operator-captured LotQuery — only the fields
+# we need.  Sothebys backend accepts custom queries (no persisted-
+# query gate), so we send a stripped version.
+_SOTHEBYS_QUERY = (
+    "query LotHammer($id: String!, $countryOfOrigin: String, "
+    "$language: TranslationLanguage!) {\n"
+    "  lot: lotV2(lotId: $id, countryOfOrigin: $countryOfOrigin, language: $language) {\n"
+    "    __typename\n"
+    "    ... on LotV2 {\n"
+    "      lotId\n"
+    "      title\n"
+    "      auction { currency currencyV2 }\n"
+    "      bidState {\n"
+    "        isClosed\n"
+    "        sold {\n"
+    "          __typename\n"
+    "          ... on ResultVisible {\n"
+    "            isSold\n"
+    "            premiums {\n"
+    "              finalPriceV2 { amount }\n"
+    "            }\n"
+    "          }\n"
+    "        }\n"
+    "        currentBidV2 { amount }\n"
+    "      }\n"
+    "    }\n"
+    "  }\n"
+    "}"
+)
+
+
+def _extract_sothebys_bearer(page) -> str | None:
+    """Pull the Auth0 access_token from localStorage.  Sothebys uses
+    @@auth0spajs@@ keys (the standard Auth0 SPA SDK pattern)."""
+    js = """
+    () => {
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k) continue;
+          if (k.includes('auth0') || k.includes('access_token') || k.includes('sothebys')) {
+            try {
+              const v = JSON.parse(localStorage.getItem(k));
+              if (v && v.body && v.body.access_token) return v.body.access_token;
+              if (v && v.access_token) return v.access_token;
+              if (v && v.body && v.body.id_token) return v.body.id_token;
+            } catch(e) {}
+          }
+        }
+      } catch(e) {}
+      return null;
+    }
     """
+    try:
+        return page.evaluate(js)
+    except Exception:
+        return None
+
+
+def _extract_sothebys_auction_id(page) -> str | None:
+    html = page.content()
+    m = re.search(r'"auctionId"\s*:\s*"([0-9a-fA-F-]{36})"', html)
+    return m.group(1) if m else None
+
+
+def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sothebys"):
+    """Cookie → Bearer → GraphQL → hammer."""
     import json as _json
     try:
         page.goto(lot_url, timeout=30_000, wait_until="domcontentloaded")
-        page.wait_for_timeout(1500)  # let Sothebys's own JS settle
+        # Auth0 SDK exchanges cookie for token shortly after load — give it 4s
+        page.wait_for_timeout(4000)
     except Exception as e:
         print(f"      ✗ goto failed: {type(e).__name__}: {str(e)[:80]}")
         return None, None
 
-    # Extract lotId from page HTML
+    bearer = _extract_sothebys_bearer(page)
+    if not bearer:
+        print("      ✗ no Bearer found in localStorage — Auth0 SDK didn't run, or cookie expired")
+        return None, None
+    if probe:
+        print(f"      bearer: {bearer[:40]}…{bearer[-20:]}")
+
     html = page.content()
     m = re.search(r'"lotId"\s*:\s*"([0-9a-fA-F-]{36})"', html)
     if not m:
         print(f"      ✗ couldn't extract lotId from page ({len(html)} chars)")
         return None, None
     lot_id = m.group(1)
+    auction_id = _extract_sothebys_auction_id(page)
     if probe:
         print(f"      lotId: {lot_id}")
+        print(f"      auctionId: {auction_id}")
 
-    # Fire the AJAX from within the page context — same origin, same
-    # cookies, same fingerprint as the real browser session.
+    # POST to the GraphQL endpoint from inside the page so origin
+    # / referer match what Sothebys's CORS expects.
     js = (
-        "async (lotId) => {\n"
-        "  const r = await fetch('/bsp-api/lot/details?itemId=' + lotId, {\n"
-        "    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },\n"
-        "    credentials: 'include',\n"
+        "async (args) => {\n"
+        "  const { bearer, query, variables, url } = args;\n"
+        "  const r = await fetch(url, {\n"
+        "    method: 'POST',\n"
+        "    headers: {\n"
+        "      'Content-Type': 'application/json',\n"
+        "      'Accept': '*/*',\n"
+        "      'Authorization': 'Bearer ' + bearer,\n"
+        "      'apollographql-client-name': 'Bidclient',\n"
+        "    },\n"
+        "    body: JSON.stringify({\n"
+        "      operationName: 'LotHammer',\n"
+        "      query, variables,\n"
+        "    }),\n"
         "  });\n"
         "  return { status: r.status, contentType: r.headers.get('content-type'), text: await r.text() };\n"
         "}"
     )
+    args = {
+        "bearer": bearer,
+        "query": _SOTHEBYS_QUERY,
+        "variables": {
+            "id": lot_id,
+            "countryOfOrigin": "IE",
+            "language": "ENGLISH",
+        },
+        "url": SOTHEBYS_GRAPHQL_URL,
+    }
     try:
-        result = page.evaluate(js, lot_id)
+        result = page.evaluate(js, args)
     except Exception as e:
-        print(f"      ✗ evaluate failed: {type(e).__name__}: {str(e)[:120]}")
+        print(f"      ✗ GraphQL fetch failed: {type(e).__name__}: {str(e)[:120]}")
         return None, None
 
     status = result.get("status")
-    ctype = result.get("contentType") or ""
     txt = result.get("text") or ""
     if probe:
-        print(f"      bsp-api: status={status}, content-type={ctype}, body {len(txt)} chars")
-
+        print(f"      graphql: status={status}, body {len(txt)} chars")
     if status != 200:
-        print(f"      ✗ bsp-api non-200: status={status}, body[0:200]={txt[:200]!r}")
+        print(f"      ✗ graphql non-200: {status}, body[0:300]={txt[:300]!r}")
         return None, None
-
     try:
         data = _json.loads(txt)
     except Exception as e:
-        print(f"      ✗ bsp-api JSON parse failed: {type(e).__name__}: {str(e)[:80]}")
+        print(f"      ✗ graphql JSON parse failed: {e}")
         print(f"        body[0:200]={txt[:200]!r}")
         return None, None
 
     if probe:
-        sample = ROOT / f"sample_{source_label}_bsp_api.json"
+        sample = ROOT / f"sample_{source_label}_graphql.json"
         sample.write_text(_json.dumps(data, indent=2, ensure_ascii=False))
-        print(f"      ◆ bsp-api JSON written to {sample}")
+        print(f"      ◆ graphql JSON written to {sample}")
 
-    return _walk_json_for_hammer(data)
+    # Extract from the known path: lot.bidState.sold.premiums[].finalPriceV2.amount
+    try:
+        lot = data["data"]["lot"]
+        sold = lot["bidState"]["sold"]
+        if sold.get("__typename") == "ResultHidden":
+            print("      ✗ sold = ResultHidden (account not entitled or sale not closed)")
+            return None, None
+        if sold.get("__typename") != "ResultVisible":
+            print(f"      ✗ sold typename unexpected: {sold.get('__typename')}")
+            return None, None
+        prems = sold.get("premiums") or []
+        if not prems:
+            print("      ✗ premiums list empty")
+            return None, None
+        amount_str = prems[0]["finalPriceV2"]["amount"]
+        currency = (lot.get("auction") or {}).get("currencyV2") or (lot.get("auction") or {}).get("currency")
+        return float(amount_str), (currency or "USD").upper()
+    except (KeyError, TypeError, ValueError) as e:
+        print(f"      ✗ parsing GraphQL response failed: {type(e).__name__}: {e}")
+        # Walker fallback — might catch a differently-shaped response
+        return _walk_json_for_hammer(data)
 
 
 # Invaluable: when logged in, the lot data island has the real sold
