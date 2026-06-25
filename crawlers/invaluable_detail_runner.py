@@ -207,10 +207,18 @@ def build_payload(data, artist_lookup, artist_vocab, current_artist_id):
             p['hammer_price'] = data['hammer_price']
             p['price_usd'] = round(data['hammer_price'] * ham_fx, 2)
         else:
-            mid = (data['estimate_low'] + data['estimate_high']) / 2
-            p['price_usd'] = round(mid * fx, 2)
-            p['hammer_price'] = None  # we don't actually know
+            # Invaluable hides hammer behind login for many sales.
+            # Previously we stored midpoint-of-estimate as `price_usd`
+            # and kept `status='sold'` — users saw fake "realized"
+            # prices in /sales and on artist pages.  Operator caught
+            # this 2026-06-26: $5K Bui Huu Hung "Mother and Children"
+            # with no hammer in detail page.  Fix: mark as
+            # estimate_only and DON'T fabricate a price.
+            p['status'] = 'estimate_only'
+            p['hammer_price'] = None
+            p['price_usd'] = None      # don't fake the realized price
         # $/m² derived from price_usd + area_m2 when both available
+        # (only set for real hammers — estimate_only stays null).
         if data.get('area_m2') and p.get('price_usd'):
             p['price_per_m2_usd'] = round(p['price_usd'] / data['area_m2'], 2)
 
