@@ -164,6 +164,107 @@ def _parse_sothebys_hammer(html: str) -> tuple[float | None, str | None]:
     return None, None
 
 
+def _walk_json_for_hammer(obj, _key_path=""):
+    """Walk a JSON-decoded dict/list looking for a hammer-shaped value.
+
+    The bsp-api response is nested; we don't know the exact schema yet,
+    so search for any (amount-looking-number + currency-code) pair under
+    keys that suggest 'sold' / 'hammer' / 'realised' rather than 'estimate'.
+    Returns (amount, currency) or (None, None).
+    """
+    HIT_KEYS = ("sold", "hammer", "realis", "realiz", "finalprice", "winningbid", "result")
+    SKIP_KEYS = ("estimate", "low", "high", "reserve", "opening")
+    CURRENCIES = {"USD","EUR","GBP","HKD","CHF","JPY","CNY","SGD","AUD","CAD"}
+
+    def _looks_like_amount_obj(d):
+        if not isinstance(d, dict):
+            return None
+        amt = d.get("value") or d.get("amount") or d.get("price")
+        cur = d.get("currency") or d.get("currencyCode") or d.get("isoCode")
+        if amt is None or cur is None:
+            return None
+        try:
+            a = float(amt)
+        except (TypeError, ValueError):
+            return None
+        if isinstance(cur, str) and cur.upper() in CURRENCIES and a >= 100:
+            return a, cur.upper()
+        return None
+
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = (k or "").lower()
+            in_path = _key_path + "/" + kl
+            if any(s in kl for s in SKIP_KEYS):
+                continue
+            if any(h in kl for h in HIT_KEYS):
+                hit = _looks_like_amount_obj(v)
+                if hit:
+                    return hit
+            r = _walk_json_for_hammer(v, in_path)
+            if r[0] is not None:
+                return r
+    elif isinstance(obj, list):
+        for item in obj:
+            r = _walk_json_for_hammer(item, _key_path)
+            if r[0] is not None:
+                return r
+    return None, None
+
+
+def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sothebys"):
+    """Sothebys loads the hammer via a separate AJAX:
+        GET /bsp-api/lot/details?itemId={lotId}
+    Cookies authenticate it.  We use Playwright's response listener to
+    grab the JSON without re-issuing the request ourselves.
+    """
+    captured = {"json": None, "status": None, "url": None}
+
+    def on_response(response):
+        if captured["json"] is not None:
+            return
+        if "/bsp-api/lot/details" in response.url:
+            captured["url"] = response.url
+            captured["status"] = response.status
+            try:
+                captured["json"] = response.json()
+            except Exception:
+                pass
+
+    page.on("response", on_response)
+    try:
+        page.goto(lot_url, timeout=30_000, wait_until="domcontentloaded")
+        # Poll up to 12s — the AJAX is normally fired within 3s.
+        for _ in range(24):
+            if captured["json"] is not None:
+                break
+            page.wait_for_timeout(500)
+    except Exception as e:
+        print(f"      ✗ goto failed: {type(e).__name__}: {str(e)[:80]}")
+        try:
+            page.remove_listener("response", on_response)
+        except Exception:
+            pass
+        return None, None
+    try:
+        page.remove_listener("response", on_response)
+    except Exception:
+        pass
+
+    data = captured["json"]
+    if data is None:
+        print(f"      ✗ bsp-api did not respond (status={captured['status']}, url={captured['url']})")
+        return None, None
+
+    if probe:
+        import json
+        sample = ROOT / f"sample_{source_label}_bsp_api.json"
+        sample.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        print(f"      ◆ bsp-api JSON written to {sample}")
+
+    return _walk_json_for_hammer(data)
+
+
 # Invaluable: when logged in, the lot data island has the real sold
 # amount.  Discovered 2026-06-26 by probe: the relevant fields are
 # embedded in the page's __NEXT_DATA__ / preloaded state.
@@ -245,37 +346,31 @@ def process_source(source: str, cookie: str, domain: str,
             url = row["source_url"]
             print(f"\n  [{i}/{len(rows)}] {row['artist_name_raw']} | {(row.get('artwork_title') or '')[:50]}")
             print(f"      URL: {url[-80:]}")
-            try:
-                page.goto(url, timeout=30_000, wait_until="domcontentloaded")
-                # Sothebys loads the hammer via AJAX ~3s after DOM ready.
-                # Wait for the 'Lot Sold' label to appear; fall through
-                # if it never does (lot still in 'estimate only' state).
-                if source == "sothebys":
-                    try:
-                        page.wait_for_function(
-                            "() => document.body.innerText.includes('Lot Sold') "
-                            "|| document.body.innerText.includes('Auction Closed')",
-                            timeout=10_000,
-                        )
-                        page.wait_for_timeout(2500)  # let the amount render
-                    except Exception:
-                        pass  # parser will return None and move on
-                else:
+            # Sothebys: capture the bsp-api/lot/details response directly
+            # (the AJAX the operator described — page initially shows
+            # 'Log in to view', then the API responds and the hammer
+            # replaces the button).  Cookies authenticate the call.
+            if source == "sothebys":
+                amt, cur = _fetch_sothebys_hammer_via_api(page, url, probe=probe, source_label=source)
+            else:
+                try:
+                    page.goto(url, timeout=30_000, wait_until="domcontentloaded")
                     page.wait_for_timeout(2500)
-                html = page.content()
-            except Exception as e:
-                print(f"      ✗ fetch failed: {type(e).__name__}: {str(e)[:80]}")
-                n_fail += 1
-                continue
+                    html = page.content()
+                except Exception as e:
+                    print(f"      ✗ fetch failed: {type(e).__name__}: {str(e)[:80]}")
+                    n_fail += 1
+                    continue
+                amt, cur = parse_fn(html)
 
-            amt, cur = parse_fn(html)
             if amt is None:
-                print(f"      ✗ no hammer parsed from page ({len(html)} chars)")
+                if source != "sothebys":
+                    print(f"      ✗ no hammer parsed from page")
                 n_fail += 1
-                if probe:
+                if probe and source != "sothebys":
                     # Save HTML so we can inspect what real hammer looks like
                     sample = ROOT / f"sample_{source}_logged_in.html"
-                    sample.write_text(html)
+                    sample.write_text(page.content())
                     print(f"      ◆ HTML sample written to {sample}")
             else:
                 print(f"      ✓ hammer = {cur} {amt:,.0f}")
