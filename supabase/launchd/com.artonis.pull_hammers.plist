@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.artonis.pull_hammers</string>
+
+    <!-- Run command -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/trietnguyen/Documents/Company/Artonis/App/ArtonisArtistPrice/supabase/pull_hammers_local.py</string>
+        <string>--source</string>
+        <string>invaluable</string>
+        <string>--limit</string>
+        <string>10</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/trietnguyen/Documents/Company/Artonis/App/ArtonisArtistPrice</string>
+
+    <!-- Schedule: Monday + Thursday 10:00.  If Mac is asleep at the
+         scheduled time, launchd queues the run and fires on next wake. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key>
+            <integer>1</integer> <!-- Monday -->
+            <key>Hour</key>
+            <integer>10</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key>
+            <integer>4</integer> <!-- Thursday -->
+            <key>Hour</key>
+            <integer>10</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+
+    <!-- Logs — overwrite each run (small, fits in /tmp) -->
+    <key>StandardOutPath</key>
+    <string>/tmp/artonis_pull_hammers.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/artonis_pull_hammers.err</string>
+
+    <!-- Don't fire on agent load — only on scheduled times -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Don't restart if it exits cleanly -->
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
