@@ -150,7 +150,23 @@ _LOT_FIELD_PATTERNS = {
     "date":           re.compile(r"(?<![A-Za-z_])date:\s*(\d+)"),
     "slug":           re.compile(r'(?<![A-Za-z_])slug:\s*"([^"]+)"'),
     "saleStatus":     re.compile(r'saleStatus:\s*"([A-Z_]+)"'),
+    # photo:{h:1200,path:"AUCTIONEER/SALE/HASH",w:1200} — the path is
+    # an opaque hash; image served from img.drouot.com/<size>/<path>.
+    # Capture path; we build the URL when storing.
+    "photoPath":      re.compile(r'photo:\{[^}]*?path:\s*"([^"]+)"'),
 }
+
+
+def _drouot_image_url(photo_path: str | None) -> str | None:
+    """Build a public image URL from Drouot's photo.path.
+
+    Drouot serves lot images at https://img.drouot.com/{size}/{path}
+    — sizes range from -m (thumbnail) to -h (full).  We pick -l (large)
+    as a good balance for thumbnails and detail pages.
+    """
+    if not photo_path:
+        return None
+    return f"https://img.drouot.com/l/{photo_path}"
 
 
 def _unescape_js_string(s):
@@ -1063,6 +1079,7 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
                 "hammer_price": hammer,
                 "currency": currency,
                 "status": status,
+                "image_url": _drouot_image_url(lot.get("photoPath")),
                 "raw_snapshot": json.dumps({
                     "organizer_house": auctioneer_name,
                     "auctioneer_slug": auct_slug,

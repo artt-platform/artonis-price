@@ -180,6 +180,7 @@ def init_db(db_path=DB_PATH):
             price_per_m2_usd real,
             status text,
             provenance text,
+            image_url text,
             raw_snapshot text,
             scraped_at text,
             foreign key(artist_id) references artists(id)

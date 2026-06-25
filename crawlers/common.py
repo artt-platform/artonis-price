@@ -628,8 +628,8 @@ def insert_sale_result(conn, record):
             artist_id, artist_name_raw, artwork_title, medium, dimensions,
             width_cm, height_cm, area_m2, year,
             estimate_low, estimate_high, hammer_price, price_with_premium, currency,
-            price_usd, price_with_premium_usd, price_per_m2_usd, status, provenance, raw_snapshot, scraped_at, kind, support_type
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            price_usd, price_with_premium_usd, price_per_m2_usd, status, provenance, image_url, raw_snapshot, scraped_at, kind, support_type
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record.get("source", ""),
@@ -657,6 +657,7 @@ def insert_sale_result(conn, record):
             derived["price_per_m2_usd"],
             record.get("status", "sold"),
             record.get("provenance", ""),
+            record.get("image_url") or None,
             record.get("raw_snapshot", ""),
             now_iso(),
             derived["kind"],
@@ -763,6 +764,7 @@ def manual_import_lot(record: dict, *,
         "price_per_m2_usd": derived["price_per_m2_usd"],
         "status": record.get("status", "sold"),
         "provenance": record.get("provenance", ""),
+        "image_url": record.get("image_url") or None,
         "raw_snapshot": record.get("raw_snapshot", ""),
         "kind": derived["kind"],
         "support_type": derived["support_type"],
