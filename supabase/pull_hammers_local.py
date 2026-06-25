@@ -289,19 +289,87 @@ def _extract_sothebys_auction_id(page) -> str | None:
 
 
 def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sothebys"):
-    """Cookie → Bearer → GraphQL → hammer."""
+    """Cookie → Bearer → GraphQL → hammer.
+
+    Two paths run in parallel:
+      A. Auth0 SDK runs in headed Chrome, deposits token in localStorage.
+         We extract it and make our own minimal GraphQL call.
+      B. Sothebys's own JS fires LotQuery to clientapi.sothelabs.com.
+         We listen for the response and parse it directly — no Bearer
+         extraction needed.  Path B is cheaper but only works if their
+         JS executes the call.
+    """
     import json as _json
+
+    # Path B: catch Sothebys's own GraphQL response if it fires
+    captured_gql = {"json": None, "url": None}
+
+    def on_response(resp):
+        if captured_gql["json"] is not None:
+            return
+        if "clientapi.prod.sothelabs.com/graphql" in resp.url:
+            try:
+                ctype = resp.headers.get("content-type", "")
+                if "json" not in ctype.lower():
+                    return
+                txt = resp.text()
+                data = _json.loads(txt)
+                # Only keep if the response has the hammer-bearing shape
+                if isinstance(data, dict):
+                    captured_gql["json"] = data
+                    captured_gql["url"] = resp.url
+            except Exception:
+                pass
+
+    page.on("response", on_response)
+
     try:
         page.goto(lot_url, timeout=30_000, wait_until="domcontentloaded")
-        # Auth0 SDK exchanges cookie for token shortly after load — give it 4s
-        page.wait_for_timeout(4000)
+        # Auth0 SDK exchanges cookie for token shortly after load.
+        # In headed Chrome the SDK runs fully; in headless it often
+        # skips.  10s window lets the page settle either way.
+        page.wait_for_timeout(10_000)
     except Exception as e:
         print(f"      ✗ goto failed: {type(e).__name__}: {str(e)[:80]}")
+        try: page.remove_listener("response", on_response)
+        except Exception: pass
         return None, None
 
+    # Path B early-return: did Sothebys's own JS deliver the hammer?
+    if captured_gql["json"] is not None:
+        if probe:
+            print(f"      ✓ captured Sothebys's own GraphQL response from {captured_gql['url']}")
+        try:
+            r = _parse_sothebys_graphql_response(captured_gql["json"])
+            if r[0] is not None:
+                if probe:
+                    sample = ROOT / f"sample_{source_label}_graphql.json"
+                    sample.write_text(_json.dumps(captured_gql["json"], indent=2, ensure_ascii=False))
+                    print(f"      ◆ graphql JSON written to {sample}")
+                try: page.remove_listener("response", on_response)
+                except Exception: pass
+                return r
+        except Exception as e:
+            if probe:
+                print(f"      ⓘ Sothebys-response path returned but parse failed: {e}; trying Bearer path")
+
+    try: page.remove_listener("response", on_response)
+    except Exception: pass
+
+    # Path A: extract Bearer + call GraphQL ourselves
     bearer = _extract_sothebys_bearer(page)
     if not bearer:
-        print("      ✗ no Bearer found in localStorage — Auth0 SDK didn't run, or cookie expired")
+        if probe:
+            # Diagnostic: dump available storage keys
+            try:
+                storage_dump = page.evaluate(
+                    "() => ({ ls: Object.keys(localStorage), ss: Object.keys(sessionStorage) })"
+                )
+                print(f"      diagnostic storage keys: {storage_dump}")
+            except Exception:
+                pass
+        print("      ✗ no Bearer found AND no graphql response captured")
+        print("        Likely: page rendered headless (Auth0 SDK skipped) or cookie expired")
         return None, None
     if probe:
         print(f"      bearer: {bearer[:40]}…{bearer[-20:]}")
@@ -373,27 +441,40 @@ def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sot
         sample.write_text(_json.dumps(data, indent=2, ensure_ascii=False))
         print(f"      ◆ graphql JSON written to {sample}")
 
-    # Extract from the known path: lot.bidState.sold.premiums[].finalPriceV2.amount
+    return _parse_sothebys_graphql_response(data)
+
+
+def _parse_sothebys_graphql_response(data: dict) -> tuple[float | None, str | None]:
+    """Pull hammer + currency from a Sothebys LotQuery/LotHammer GraphQL
+    response.  Tolerates both shapes (Sothebys's full query vs our
+    minimal one) by searching common paths and falling back to
+    walker.
+    """
     try:
-        lot = data["data"]["lot"]
-        sold = lot["bidState"]["sold"]
-        if sold.get("__typename") == "ResultHidden":
-            print("      ✗ sold = ResultHidden (account not entitled or sale not closed)")
-            return None, None
-        if sold.get("__typename") != "ResultVisible":
-            print(f"      ✗ sold typename unexpected: {sold.get('__typename')}")
-            return None, None
-        prems = sold.get("premiums") or []
-        if not prems:
-            print("      ✗ premiums list empty")
-            return None, None
-        amount_str = prems[0]["finalPriceV2"]["amount"]
-        currency = (lot.get("auction") or {}).get("currencyV2") or (lot.get("auction") or {}).get("currency")
-        return float(amount_str), (currency or "USD").upper()
-    except (KeyError, TypeError, ValueError) as e:
-        print(f"      ✗ parsing GraphQL response failed: {type(e).__name__}: {e}")
-        # Walker fallback — might catch a differently-shaped response
-        return _walk_json_for_hammer(data)
+        lot = (data.get("data") or {}).get("lot") or {}
+        bid_state = lot.get("bidState") or {}
+        sold = bid_state.get("sold") or {}
+        tname = sold.get("__typename")
+        currency = ((lot.get("auction") or {}).get("currencyV2")
+                    or (lot.get("auction") or {}).get("currency"))
+        if tname == "ResultVisible":
+            prems = sold.get("premiums") or []
+            for p in prems:
+                fp = p.get("finalPriceV2") or p.get("finalPrice") or {}
+                amt = fp.get("amount")
+                if amt:
+                    return float(amt), (currency or "USD").upper()
+        # Fallback paths sometimes seen in the operator-captured payload
+        for key in ("finalPrice", "currentBid"):
+            v = bid_state.get(key)
+            if isinstance(v, dict):
+                amt = v.get("amount")
+                if amt:
+                    return float(amt), (currency or "USD").upper()
+    except (TypeError, ValueError) as e:
+        pass
+    # Final fallback: structure-agnostic walker
+    return _walk_json_for_hammer(data)
 
 
 # Invaluable: when logged in, the lot data island has the real sold
@@ -461,8 +542,14 @@ def process_source(source: str, cookie: str, domain: str,
     print(f"  [{source}] {len(rows)} lots queued")
 
     from playwright.sync_api import sync_playwright
+    # Sothebys's Auth0 SDK skips silently under headless Chrome (likely
+    # a navigator.webdriver guard).  Without the SDK, no Bearer token is
+    # issued and the GraphQL call never fires.  Run headed for Sothebys.
+    # A Chrome window will briefly appear; close it gets handled by the
+    # context manager exit.
+    headless = (source != "sothebys")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
             user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
