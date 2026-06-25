@@ -373,7 +373,21 @@ def _parse_artist_and_title(description):
             head,
         )
         if not m_comma:
-            return "", "", None, None
+            # Last-resort fallback: ask Claude Haiku to extract
+            # artist + title.  Pre-filter dodges Asian Art antique
+            # lots ('CHINA, Qing dynasty / glazed jar...').  See
+            # crawlers/llm_parser.py for cost (~$0.0014/lot) and
+            # validation rules.  Returns ('','',None,None) on any
+            # failure / low-confidence, so behavior is unchanged
+            # when LLM is disabled / API key absent.
+            try:
+                from crawlers.llm_parser import llm_artist_fallback
+                a, t, b, d = llm_artist_fallback(description)
+            except Exception:
+                a, t, b, d = '', '', None, None
+            if not a:
+                return "", "", None, None
+            return a, t, b, d
         artist = clean_text(m_comma.group(1).strip().title())
         b_yr = d_yr = None
         m = m_comma   # m.end() now points just after 'LASTNAME, '
