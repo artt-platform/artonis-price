@@ -218,7 +218,7 @@ def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sot
     Cookies authenticate it.  We use Playwright's response listener to
     grab the JSON without re-issuing the request ourselves.
     """
-    captured = {"json": None, "status": None, "url": None}
+    captured = {"json": None, "status": None, "url": None, "raw": None, "err": None}
 
     def on_response(response):
         if captured["json"] is not None:
@@ -226,10 +226,24 @@ def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sot
         if "/bsp-api/lot/details" in response.url:
             captured["url"] = response.url
             captured["status"] = response.status
+            # Try response.text() first then json.loads — more reliable
+            # than response.json() when content-type is not strictly
+            # application/json.
+            import json as _json
             try:
-                captured["json"] = response.json()
-            except Exception:
-                pass
+                txt = response.text()
+                captured["raw"] = txt[:300]
+                captured["json"] = _json.loads(txt)
+            except Exception as ex:
+                captured["err"] = f"{type(ex).__name__}: {str(ex)[:120]}"
+                # Try .body() as a last resort
+                try:
+                    raw = response.body().decode("utf-8", errors="replace")
+                    captured["raw"] = raw[:300]
+                    captured["json"] = _json.loads(raw)
+                    captured["err"] = None
+                except Exception as ex2:
+                    captured["err"] = captured["err"] + f" / body: {type(ex2).__name__}: {str(ex2)[:80]}"
 
     page.on("response", on_response)
     try:
@@ -253,7 +267,11 @@ def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sot
 
     data = captured["json"]
     if data is None:
-        print(f"      ✗ bsp-api did not respond (status={captured['status']}, url={captured['url']})")
+        print(f"      ✗ bsp-api: status={captured['status']}")
+        if captured["err"]:
+            print(f"        parse error: {captured['err']}")
+        if captured["raw"]:
+            print(f"        raw[0:300]: {captured['raw']!r}")
         return None, None
 
     if probe:
