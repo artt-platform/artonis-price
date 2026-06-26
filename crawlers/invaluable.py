@@ -61,7 +61,9 @@ VN_ARTISTS = [
 
 
 def _extract_cards_via_browser(page):
-    """Run JS in-page to extract all cards around auction-lot links."""
+    """Run JS in-page to extract all cards around auction-lot links.
+    Also pulls the card thumbnail src so we get an image_url without
+    visiting the per-lot page (which is CF-blocked)."""
     js = """
     () => {
         const results = [];
@@ -77,7 +79,20 @@ def _extract_cards_via_browser(page):
                 el = el.parentElement;
                 if (el.innerText.length > 150) break;
             }
-            results.push({href, text: el.innerText.trim().substring(0, 1500)});
+            // Find the thumbnail image inside the card.  Prefer the
+            // largest <img> (Invaluable cards use a card-level lot
+            // thumbnail + sometimes a tiny house logo).
+            let imgUrl = '';
+            const imgs = el.querySelectorAll('img');
+            let bestArea = 0;
+            for (const img of imgs) {
+                const src = img.src || img.getAttribute('data-src') || '';
+                if (!src || !src.startsWith('http')) continue;
+                if (src.includes('logo') || src.includes('avatar')) continue;
+                const area = (img.naturalWidth || img.width || 0) * (img.naturalHeight || img.height || 0);
+                if (area > bestArea) { bestArea = area; imgUrl = src; }
+            }
+            results.push({href, text: el.innerText.trim().substring(0, 1500), image: imgUrl});
         }
         return results;
     }
@@ -252,6 +267,11 @@ def crawl_artist(page, slug, canonical_name, timeout=40000):
             "currency": parsed.get("currency", "USD"),
             "status": "estimate_only",  # mark that this is estimate, not realized
             "raw_snapshot": card["text"][:500],
+            # Card thumbnail — fetched from the Invaluable artist-listing
+            # page where CF is more permissive than the lot-detail page.
+            # Stores the CDN URL directly (image.invaluable.com / etc.);
+            # backfill_og_images.py won't try to refetch these.
+            "image_url": (card.get("image") or None),
         }
         if rec["hammer_price"]:
             records.append(rec)
