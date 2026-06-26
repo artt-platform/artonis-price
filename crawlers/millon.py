@@ -113,9 +113,21 @@ def _fetch_lot_details(scraper, lot_url):
                 if m_b:
                     birth_year = int(m_b.group(1))
 
-        # Medium + dimensions from meta description.
+        # Medium + dimensions: prefer the fuller body description from
+        # div.content (or h3-followed-by-text) over the SEO meta tag,
+        # which Google often truncates and which omits the dim line for
+        # lots with a long narrative.  Lot 34 of vente4201 (Le Van De
+        # 'Livret d'exposition') is the canonical example — meta_desc
+        # had no '16,2 x 12,2 cm' line, body did.  Fall back to meta
+        # when the body container is missing.
+        body_el = soup.select_one("div.content") or soup.select_one("div.lot-description")
+        body_desc = body_el.get_text(" ", strip=True) if body_el else ""
         meta = soup.find("meta", {"name": "description"})
-        desc = meta.get("content", "") if meta else ""
+        meta_desc = meta.get("content", "") if meta else ""
+        # Use whichever is longer + contains a 'cm' / 'in' marker
+        desc = body_desc if (len(body_desc) > len(meta_desc) and "cm" in body_desc.lower()) else meta_desc
+        if not desc:
+            desc = body_desc or meta_desc
         # Use shared parsers (SPEC §10).  Millon = HW_FIRST convention.
         from crawlers.parsers import parse_dim, extract_medium
         width_cm, height_cm, area_m2, dims = parse_dim(desc, source="millon")
