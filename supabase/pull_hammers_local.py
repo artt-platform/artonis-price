@@ -738,11 +738,14 @@ def process_source(source: str, cookie: str, domain: str,
         return
 
     from playwright.sync_api import sync_playwright
-    # Sothebys's backend returns ResultHidden when it detects automation
-    # (navigator.webdriver, missing chrome.* objects, etc.) even with a
-    # valid logged-in cookie.  Headed mode + stealth init script gets
-    # us past the simpler checks.
-    headless = (source != "sothebys")
+    # Both Sothebys and Invaluable need headed Chrome:
+    #   Sothebys: Auth0 SDK refuses to issue token under headless
+    #   Invaluable: Cloudflare returns 'Just a moment' challenge to
+    #               headless requests; headed Chrome passes the JS
+    #               challenge automatically in 5-8s
+    # Operator 2026-06-26: 10/10 Invaluable lots CF-skipped under
+    # headless even with stealth init script; flipping to headed.
+    headless = source not in ("sothebys", "invaluable")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=headless)
         context = browser.new_context(
