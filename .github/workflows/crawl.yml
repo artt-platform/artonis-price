@@ -116,6 +116,12 @@ jobs:
         run: |
           python3 supabase/fetch_upcoming.py
 
+      - name: Fix dim orientation (W/H by image aspect)
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 supabase/fix_dim_orientation.py
+
       - name: Summary
         if: always()
         run: |
