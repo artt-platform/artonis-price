@@ -747,7 +747,31 @@ def process_source(source: str, cookie: str, domain: str,
     # headless even with stealth init script; flipping to headed.
     headless = source not in ("sothebys", "invaluable")
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        # For Invaluable: use the operator's real installed Chrome
+        # (channel='chrome'), not Playwright's bundled Chromium.
+        # Real Chrome has the standard fingerprint Cloudflare expects;
+        # bundled Chromium gets flagged even in headed mode.  The
+        # --disable-blink-features=AutomationControlled arg drops the
+        # navigator.webdriver=true that CF specifically keys on.
+        launch_kwargs = {"headless": headless}
+        if source == "invaluable":
+            launch_kwargs["channel"] = "chrome"
+            launch_kwargs["args"] = [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ]
+        try:
+            browser = p.chromium.launch(**launch_kwargs)
+        except Exception as e:
+            # channel='chrome' fails if Chrome isn't installed → fall
+            # back to bundled Chromium with a warning
+            if source == "invaluable":
+                print("      ⚠ real Chrome not found, falling back to bundled Chromium")
+                print(f"        (install Chrome from google.com/chrome to get past CF)")
+                launch_kwargs.pop("channel", None)
+                browser = p.chromium.launch(**launch_kwargs)
+            else:
+                raise
         context = browser.new_context(
             user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -804,16 +828,19 @@ def process_source(source: str, cookie: str, domain: str,
                     # in 5-8s typically.
                     if source == "invaluable":
                         try:
+                            # Up to 35s — CF visible challenge ("Performing
+                            # security verification") can take longer than
+                            # the silent 'Just a moment' variant.
                             page.wait_for_function(
                                 "() => {"
-                                "  const t = document.title || '';"
-                                "  if (t.toLowerCase().includes('just a moment')) return false;"
+                                "  const t = (document.title || '').toLowerCase();"
+                                "  if (t.includes('just a moment') || t.includes('security verification')) return false;"
                                 "  const html = document.documentElement.innerHTML;"
                                 "  return html.length > 60000 && "
                                 "    (html.includes('soldAmount') || html.includes('Sold at Auction')"
                                 "     || html.includes('isLotClosed'));"
                                 "}",
-                                timeout=20_000,
+                                timeout=35_000,
                             )
                         except Exception:
                             pass  # parser will detect cf_challenge below
