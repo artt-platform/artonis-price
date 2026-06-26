@@ -747,39 +747,46 @@ def process_source(source: str, cookie: str, domain: str,
     # headless even with stealth init script; flipping to headed.
     headless = source not in ("sothebys", "invaluable")
     with sync_playwright() as p:
-        # For Invaluable: use the operator's real installed Chrome
-        # (channel='chrome'), not Playwright's bundled Chromium.
-        # Real Chrome has the standard fingerprint Cloudflare expects;
-        # bundled Chromium gets flagged even in headed mode.  The
-        # --disable-blink-features=AutomationControlled arg drops the
-        # navigator.webdriver=true that CF specifically keys on.
-        launch_kwargs = {"headless": headless}
+        # For Invaluable: use a PERSISTENT Chrome profile so that the
+        # cf_clearance cookie obtained from one solve carries to the
+        # next run.  channel='chrome' uses the operator's real Chrome.
+        # First run shows CF challenge → operator solves once →
+        # subsequent runs reuse the same profile → no challenge.
+        browser = None
         if source == "invaluable":
-            launch_kwargs["channel"] = "chrome"
-            launch_kwargs["args"] = [
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
-            ]
-        try:
-            browser = p.chromium.launch(**launch_kwargs)
-        except Exception as e:
-            # channel='chrome' fails if Chrome isn't installed → fall
-            # back to bundled Chromium with a warning
-            if source == "invaluable":
-                print("      ⚠ real Chrome not found, falling back to bundled Chromium")
-                print(f"        (install Chrome from google.com/chrome to get past CF)")
-                launch_kwargs.pop("channel", None)
-                browser = p.chromium.launch(**launch_kwargs)
-            else:
-                raise
-        context = browser.new_context(
-            user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"),
-            viewport={"width": 1440, "height": 900},
-            locale="en-US",
-        )
-        context.add_cookies(_parse_cookie_string(cookie, domain))
+            profile_dir = ROOT / ".chrome_profile_invaluable"
+            profile_dir.mkdir(exist_ok=True)
+            try:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=str(profile_dir),
+                    channel="chrome",
+                    headless=False,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                    ],
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-US",
+                    user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/131.0.0.0 Safari/537.36"),
+                )
+            except Exception as e:
+                print(f"      ⚠ persistent Chrome failed: {e}")
+                browser = p.chromium.launch(headless=False)
+                context = browser.new_context()
+            # Also seed our session cookie into the persistent profile
+            context.add_cookies(_parse_cookie_string(cookie, domain))
+        else:
+            browser = p.chromium.launch(headless=headless)
+            context = browser.new_context(
+                user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/131.0.0.0 Safari/537.36"),
+                viewport={"width": 1440, "height": 900},
+                locale="en-US",
+            )
+            context.add_cookies(_parse_cookie_string(cookie, domain))
         # Stealth applied for BOTH sources — Invaluable's Cloudflare
         # also keys on automation markers.  Operator 2026-06-26: 10/10
         # Invaluable lots returned CF challenge until stealth+wait
@@ -801,6 +808,32 @@ def process_source(source: str, cookie: str, domain: str,
                 }
             """)
         page = context.new_page()
+
+        # Invaluable warmup: first navigate to a generic page so the
+        # operator can solve any CF challenge ONCE (subsequent lots
+        # reuse the cf_clearance cookie from the persistent profile).
+        if source == "invaluable":
+            try:
+                print("\n  [invaluable] warmup — opening invaluable.com to clear CF")
+                page.goto("https://www.invaluable.com/", timeout=60_000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+                title = (page.title() or "").lower()
+                if "just a moment" in title or "security verification" in title:
+                    print("    ⚠ Cloudflare challenge visible — please click the checkbox")
+                    print("    (or wait; will auto-continue when page clears)")
+                    try:
+                        page.wait_for_function(
+                            "() => !((document.title||'').toLowerCase().includes('just a moment') "
+                            "      || (document.title||'').toLowerCase().includes('security verification'))",
+                            timeout=120_000,  # 2 min for operator to solve
+                        )
+                        print("    ✓ CF cleared, proceeding")
+                    except Exception:
+                        print("    ⚠ still on challenge page after 2 min — continuing anyway")
+                else:
+                    print(f"    ✓ no CF challenge (title: {page.title()[:60]!r})")
+            except Exception as e:
+                print(f"    ⚠ warmup error: {e}")
 
         n_ok = n_fail = 0
         for i, row in enumerate(rows, 1):
