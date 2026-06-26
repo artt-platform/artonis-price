@@ -68,7 +68,12 @@ ALL_CRAWLERS = [
     # ('heritage',       'crawlers.heritage',       'heritage',       'crawl'),
     ('millon',         'crawlers.millon',         'millon',         'crawl_all'),
     ('millon_past',    'crawlers.millon',         'millon',         'crawl_past_broad'),
-    ('millon_vn',      'crawlers.millon_vn',      'millon',         'crawl'),
+    # millon-vietnam.com is a MIRROR of millon.com — every lot
+    # appears under both domains.  Crawling it caused 268 duplicate
+    # rows (deleted 2026-06-28).  Per SPEC §3.7, only millon.com is
+    # crawled.  Keep crawlers/millon_vn.py for reference but DO NOT
+    # re-enable without removing the dedup logic on Supabase side.
+    # ('millon_vn',      'crawlers.millon_vn',      'millon',         'crawl'),
     ('gros_delettrez', 'crawlers.gros_delettrez', 'gros-delettrez', 'crawl'),
     ('dawsons',        'crawlers.dawsons',        'dawsons',        'crawl'),
     # /auction-catalog/ WordPress platform — 5 houses sharing the same
