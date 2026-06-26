@@ -753,10 +753,11 @@ def process_source(source: str, cookie: str, domain: str,
             locale="en-US",
         )
         context.add_cookies(_parse_cookie_string(cookie, domain))
-        if source == "sothebys":
-            # Hide automation markers that Sothebys's backend keys on.
-            # Order matters — must run before any of Sothebys's JS loads,
-            # so attach as an init script (fires on every new document).
+        # Stealth applied for BOTH sources — Invaluable's Cloudflare
+        # also keys on automation markers.  Operator 2026-06-26: 10/10
+        # Invaluable lots returned CF challenge until stealth+wait
+        # were added.
+        if source in ("sothebys", "invaluable"):
             context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
@@ -792,8 +793,29 @@ def process_source(source: str, cookie: str, domain: str,
                     amt, cur = _fetch_sothebys_hammer_via_api(page, url, probe=probe, source_label=source)
             else:
                 try:
-                    page.goto(url, timeout=30_000, wait_until="domcontentloaded")
-                    page.wait_for_timeout(2500)
+                    page.goto(url, timeout=45_000, wait_until="domcontentloaded")
+                    # Cloudflare challenge: the first response can be the
+                    # 'Just a moment' page; wait for the real lot HTML to
+                    # render (Sold/Sold at Auction text, or soldAmount in
+                    # data island).  Up to 20s — CF JS challenges resolve
+                    # in 5-8s typically.
+                    if source == "invaluable":
+                        try:
+                            page.wait_for_function(
+                                "() => {"
+                                "  const t = document.title || '';"
+                                "  if (t.toLowerCase().includes('just a moment')) return false;"
+                                "  const html = document.documentElement.innerHTML;"
+                                "  return html.length > 60000 && "
+                                "    (html.includes('soldAmount') || html.includes('Sold at Auction')"
+                                "     || html.includes('isLotClosed'));"
+                                "}",
+                                timeout=20_000,
+                            )
+                        except Exception:
+                            pass  # parser will detect cf_challenge below
+                    else:
+                        page.wait_for_timeout(2500)
                     html = page.content()
                 except Exception as e:
                     print(f"      ✗ fetch failed: {type(e).__name__}: {str(e)[:80]}")
