@@ -469,11 +469,17 @@ def crawl(conn, verbose=True, filter_vn=True):
                 desc_plain = _strip_html(desc_fr)
                 width_cm, height_cm, area_m2, dimensions = parse_dim(desc_plain, source="aguttes")
                 medium = extract_medium(desc_plain)
-                # Aguttes-specific French keyword fallback when shared list misses
+                # Aguttes-specific French keyword fallback when shared list misses.
+                # Stop at the first DIGIT (which starts the dim block,
+                # '39,5 x 45 cm') rather than at comma — operator hit
+                # 'soie 39' as a stored medium 2026-06-28 because the
+                # old regex grabbed up to the next comma which was
+                # inside the dim itself ('39,5').
                 if not medium:
                     m_med = re.search(
-                        r"((?:Huile|Aquarelle|Encre|Laque|Gouache|Pastel|Fusain|Sanguine|"
-                        r"Crayon|Soie|Acrylique|Mine\s+de\s+plomb)[^.\n,]{0,80})",
+                        r"((?:Tempera|Huile|Aquarelle|Encre|Laque|Gouache|Pastel|Fusain|Sanguine|"
+                        r"Crayon|Soie|Acrylique|Mine\s+de\s+plomb)"
+                        r"(?:\s+(?:sur|et|de|au|à|aux|à\s+la|en|sous)\s+[A-Za-zÀ-ÿ]+)*)",
                         desc_plain, re.IGNORECASE,
                     )
                     if m_med:
