@@ -427,6 +427,13 @@ def crawl(conn, verbose=True, filter_vn=True):
                 continue
 
             inserted = 0
+            # Aguttes API returns the same physical lot under multiple
+            # UUIDs (lot UUID + catalogue-lot UUID + preview UUID).  Per-
+            # auction dedupe key = (artist, dim, title); within each
+            # group keep the entry with the higher hammer.  See operator
+            # audit 2026-06-28: 18 duplicate groups (36 rows) cleaned
+            # by hand before this fix landed.
+            recs_by_key: dict[tuple[str, str, str], dict] = {}
             for lot in lots:
                 if lot.get("status") != "sold" and not lot.get("hammer_price"):
                     continue
@@ -545,6 +552,19 @@ def crawl(conn, verbose=True, filter_vn=True):
                 }
                 # Pace lot-page fetches to avoid rate-limiting Aguttes
                 time.sleep(0.3)
+                # Stash by (artist, dim, title) — multi-UUID dedup;
+                # keep the entry with the higher hammer.
+                dedup_key = (
+                    (rec.get("artist_name_raw") or "").strip().lower(),
+                    (rec.get("dimensions") or "").strip().lower(),
+                    (rec.get("artwork_title") or "").strip().lower(),
+                )
+                prev = recs_by_key.get(dedup_key)
+                if prev is None or (rec.get("hammer_price") or 0) > (prev.get("hammer_price") or 0):
+                    recs_by_key[dedup_key] = rec
+
+            # Flush deduped lots
+            for rec in recs_by_key.values():
                 insert_sale_result(conn, rec)
                 inserted += 1
             conn.commit()
