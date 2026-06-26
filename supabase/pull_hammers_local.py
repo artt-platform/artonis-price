@@ -1018,8 +1018,26 @@ def main() -> None:
         )
 
     print("\nDone.")
+    # Show remaining queue per source so the operator knows how many
+    # more Pull_*.command runs are needed.
+    if not args.probe and args.source != "both":
+        params = {
+            "select": "id", "source": f"eq.{args.source}",
+            "hammer_price": "is.null", "source_url": "not.is.null",
+            "status": "not.in.(passed,withdrawn)",
+        }
+        try:
+            rr = requests.head(f"{URL}/rest/v1/sale_results",
+                               params=params, headers={**H, "Prefer": "count=exact"},
+                               timeout=10)
+            remaining = int(rr.headers.get("content-range", "0-0/0").split("/")[-1])
+            print(f"\n  Còn {remaining} lots {args.source} cần pull "
+                  f"(~{(remaining + args.limit - 1) // args.limit} lần chạy "
+                  f"nữa với --limit {args.limit}).")
+        except Exception as e:
+            print(f"  (couldn't count remaining: {e})")
     if not args.probe:
-        print("Refreshing artist stats…")
+        print("\nRefreshing artist stats…")
         import subprocess
         subprocess.run(["python3", str(ROOT / "supabase" / "refresh_artist_stats.py")], check=False)
 

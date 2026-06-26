@@ -8,12 +8,12 @@ cd "$(dirname "$0")"
 echo ""
 echo "════════════════════════════════════════════════════════════"
 echo "  Artonis hammer puller — Sothebys"
-echo "  Pulling 10 lots via direct GraphQL"
+echo "  Pulling 20 lots via direct GraphQL"
 echo "════════════════════════════════════════════════════════════"
 echo ""
 
 /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 \
-  supabase/pull_hammers_local.py --source sothebys --limit 10
+  supabase/pull_hammers_local.py --source sothebys --limit 20
 
 echo ""
 echo "════════════════════════════════════════════════════════════"
