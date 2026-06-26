@@ -764,7 +764,13 @@ def process_source(source: str, cookie: str, domain: str,
                     args=[
                         "--disable-blink-features=AutomationControlled",
                         "--disable-features=IsolateOrigins,site-per-process",
+                        "--disable-infobars",
                     ],
+                    # Crucially, drop --enable-automation (Playwright's
+                    # default) — that flag is what shows the 'Chrome is
+                    # being controlled by automated test software' banner
+                    # AND sets navigator.webdriver=true that CF reads.
+                    ignore_default_args=["--enable-automation"],
                     viewport={"width": 1440, "height": 900},
                     locale="en-US",
                     user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
