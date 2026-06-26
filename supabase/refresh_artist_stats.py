@@ -33,30 +33,37 @@ while True:
     from_idx += 1000
 print(f"  artists: {len(artists)}, sales: {len(all_sales)}")
 
-# Aggregate by artist_id
+# Aggregate by artist_id.  auction_count = every linked lot the
+# artist appears in (including estimate_only / passed / withdrawn) —
+# so newly catalogued artists whose only known lot is upcoming or
+# unpriced still show on /artists.  Min/max/avg are computed from
+# priced lots only.  Operator caught Vũ Đăng Bốn 2026-06-26 — he
+# was hidden because the only G&D lot was 'no live bidding' /
+# estimate_only and price_usd stayed null.
 agg = {}
 for s in all_sales:
     aid = s.get('artist_id')
     if not aid: continue
+    if aid not in agg:
+        agg[aid] = {'min': None, 'max': None, 'sum': 0, 'priced_count': 0, 'total_count': 0}
+    a = agg[aid]
+    a['total_count'] += 1
     p = s.get('price_with_premium_usd') or s.get('price_usd')
     if p is None or p <= 0: continue
-    if aid not in agg:
-        agg[aid] = {'min': p, 'max': p, 'sum': 0, 'count': 0}
-    a = agg[aid]
-    a['min'] = min(a['min'], p)
-    a['max'] = max(a['max'], p)
+    a['min'] = p if a['min'] is None else min(a['min'], p)
+    a['max'] = p if a['max'] is None else max(a['max'], p)
     a['sum'] += p
-    a['count'] += 1
+    a['priced_count'] += 1
 
 # Update each artist
 print(f"\nUpdating {len(agg)} artists with new aggregates...")
 ok = 0
 for aid, a in agg.items():
-    avg = a['sum'] / a['count'] if a['count'] else None
+    avg = a['sum'] / a['priced_count'] if a['priced_count'] else None
     body = {
-        'auction_count': a['count'],
-        'overall_min_usd': round(a['min'], 2),
-        'overall_max_usd': round(a['max'], 2),
+        'auction_count': a['total_count'],
+        'overall_min_usd': round(a['min'], 2) if a['min'] is not None else None,
+        'overall_max_usd': round(a['max'], 2) if a['max'] is not None else None,
         'overall_avg_usd': round(avg, 2) if avg else None,
     }
     r = requests.patch(f"{URL}/rest/v1/artists?id=eq.{aid}", headers={**H, 'Prefer': 'return=minimal'},
