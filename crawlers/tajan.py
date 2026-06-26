@@ -492,7 +492,25 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
             provenance = _parse_provenance(desc_raw)
             lot_ref = lot.get("ref") or ""
             lot_number = lot.get("lotNumber")
-            lot_url = f"{BASE}/lot/{lot_ref}" if lot_ref else catalog_url
+            # Build the auction-lot URL.  Tajan changed the format from
+            # /lot/{HEX} to /auction-lot/{slug}_{HEX} sometime before
+            # 2026-06.  Slug = kebab(artist) + birth-death year if known.
+            if lot_ref:
+                import unicodedata as _u
+                t = _u.normalize("NFD", artist_clean or "")
+                t = "".join(c for c in t if _u.category(c) != "Mn")
+                t = t.replace("Đ","D").replace("đ","d").lower()
+                slug = re.sub(r"[^a-z0-9]+", "-", t).strip("-")
+                # Try to recover lifespan from desc_raw or _alt_birth
+                # for slug enrichment.  Tajan's slug appends '-YYYY-YYYY'.
+                m_yrs = re.search(r"\((\d{4})\s*[-–]\s*(\d{4})\)", desc_raw or "")
+                if m_yrs:
+                    slug = f"{slug}-{m_yrs.group(1)}-{m_yrs.group(2)}"
+                elif _alt_birth:
+                    slug = f"{slug}-{_alt_birth}"
+                lot_url = f"{BASE}/auction-lot/{slug}_{lot_ref}"
+            else:
+                lot_url = catalog_url
 
             rec = {
                 "source": "tajan",
