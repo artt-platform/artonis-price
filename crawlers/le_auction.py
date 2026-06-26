@@ -317,6 +317,17 @@ def crawl(conn, sale_specs=None, delay=0.5, verbose=True, filter_vn=False, max_p
                     # Fallback to hash-format URL if portalKey missing
                     lot_url = f"{HOUSE_URL}#catalog~{aid}~{did}~item~{item_id}"
 
+                # Image URL pattern (verified 2026-06-28): Bidspirit
+                # stores lot images on Fastly CDN at
+                #   bidspirit-images.global.ssl.fastly.net/
+                #   leauction/cloned-images/{item_id}/003/a_ignore_q_80_w_500
+                # The /003/ slot is the canonical main shot; /001//002
+                # are gallery extras.  Direct curl returns 403 (Fastly
+                # gates IPs/UA) but browser <img> loads fine.
+                img_url = (
+                    f"https://bidspirit-images.global.ssl.fastly.net/"
+                    f"leauction/cloned-images/{item_id}/003/a_ignore_q_80_w_500"
+                ) if item_id else None
                 rec = {
                     "source": SOURCE,
                     "source_url": lot_url,
@@ -337,6 +348,7 @@ def crawl(conn, sale_specs=None, delay=0.5, verbose=True, filter_vn=False, max_p
                     "currency": currency,
                     "status": "sold",
                     "provenance": "",
+                    "image_url": img_url,
                     "raw_snapshot": (clean_text(item.get("description") or ""))[:500],
                 }
                 insert_sale_result(conn, rec)
