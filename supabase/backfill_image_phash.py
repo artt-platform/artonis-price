@@ -88,28 +88,37 @@ def patch_phash(row_id: int, phash: str) -> bool:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", default=None)
-    ap.add_argument("--limit", type=int, default=5000)
     ap.add_argument("--refresh", action="store_true",
                     help="Recompute phash even for rows that already have one")
     ap.add_argument("--sleep", type=float, default=0.15,
                     help="Seconds between requests (rate-limit politeness)")
+    ap.add_argument("--max-batches", type=int, default=20,
+                    help="Cap total PostgREST page fetches (each ≤1000 rows)")
     args = ap.parse_args()
 
-    rows = fetch_pending(args.source, args.limit, args.refresh)
-    print(f"Lots queued: {len(rows)}"
-          + (f" (source={args.source})" if args.source else "")
-          + (" [refresh]" if args.refresh else ""))
-    n_ok = n_fail = 0
-    for i, row in enumerate(rows, 1):
-        phash = compute_phash(row["image_url"])
-        if phash and patch_phash(row["id"], phash):
-            n_ok += 1
-            if i <= 5 or i % 50 == 0:
-                print(f"  [{i}/{len(rows)}] id={row['id']} phash={phash}")
-        else:
-            n_fail += 1
-        time.sleep(args.sleep)
-    print(f"\nDone: {n_ok} hashed, {n_fail} failed")
+    total_ok = total_fail = 0
+    for batch in range(1, args.max_batches + 1):
+        rows = fetch_pending(args.source, 1000, args.refresh)
+        if not rows:
+            break
+        print(f"\n=== Batch {batch} : {len(rows)} lots ===")
+        n_ok = n_fail = 0
+        for i, row in enumerate(rows, 1):
+            phash = compute_phash(row["image_url"])
+            if phash and patch_phash(row["id"], phash):
+                n_ok += 1
+                if i <= 3 or i % 100 == 0:
+                    print(f"  [{i}/{len(rows)}] id={row['id']} phash={phash}")
+            else:
+                n_fail += 1
+            time.sleep(args.sleep)
+        total_ok += n_ok
+        total_fail += n_fail
+        print(f"  batch {batch} done: {n_ok} hashed, {n_fail} failed")
+        if args.refresh:
+            # Refresh mode would loop forever; bail after one batch
+            break
+    print(f"\nTotal: {total_ok} hashed, {total_fail} failed across batches")
 
 
 if __name__ == "__main__":
