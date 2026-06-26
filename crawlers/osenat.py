@@ -632,6 +632,11 @@ def crawl(conn, sale_specs=None, years=None, delay=1.2, verbose=True, filter_vn=
                     "currency": currency,
                     "status": "sold",
                     "provenance": "",
+                    # Source of truth = scoped fiche_lot_description div
+                    # (fetch_lot_detail already scopes via the div regex).
+                    # Older lots in DB inherited page-body noise; this
+                    # writes the clean version going forward.
+                    "catalog_description": detail["description"][:2000],
                     "raw_snapshot": detail["description"][:500],
                 }
                 insert_sale_result(conn, rec)

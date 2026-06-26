@@ -108,16 +108,18 @@ def _mark_invaluable_unsold(row_id: int) -> bool:
     return r.status_code < 300
 
 
-def patch_hammer(row_id: int, hammer: float, currency: str, fx: dict) -> bool:
+def patch_hammer(row_id: int, hammer: float, currency: str, fx: dict,
+                 image_url: str | None = None) -> bool:
     fx_to_usd = fx.get(currency.upper(), 1.0)
     price_usd = round(hammer * fx_to_usd, 2)
     premium = round(hammer * 1.25, 2)  # default 25% buyer premium
     premium_usd = round(premium * fx_to_usd, 2)
-    # Get area for $/m²
+    # Get area + existing image for $/m² + don't overwrite image
     rr = requests.get(f"{URL}/rest/v1/sale_results",
-                      params={"id": f"eq.{row_id}", "select": "area_m2"},
+                      params={"id": f"eq.{row_id}", "select": "area_m2,image_url"},
                       headers=H, timeout=10)
-    area = (rr.json()[0].get("area_m2") if rr.ok and rr.json() else None)
+    row = rr.json()[0] if rr.ok and rr.json() else {}
+    area = row.get("area_m2")
     ppm = round(price_usd / area, 2) if area else None
     patch = {
         "hammer_price": hammer,
@@ -128,6 +130,9 @@ def patch_hammer(row_id: int, hammer: float, currency: str, fx: dict) -> bool:
         "price_per_m2_usd": ppm,
         "status": "sold",  # DB guard verifies hammer is non-null
     }
+    # Only set image_url when (a) we have a new one and (b) it's missing
+    if image_url and not row.get("image_url"):
+        patch["image_url"] = image_url
     pr = requests.patch(f"{URL}/rest/v1/sale_results",
                        params={"id": f"eq.{row_id}"},
                        headers=H, json=patch, timeout=10)
@@ -262,10 +267,42 @@ _SOTHEBYS_QUERY = (
     "        }\n"
     "        currentBidV2 { amount }\n"
     "      }\n"
+    "      media(imageSizes: [Large, ExtraLarge]) {\n"
+    "        images {\n"
+    "          renditions { url imageSize width height }\n"
+    "        }\n"
+    "      }\n"
     "    }\n"
     "  }\n"
     "}"
 )
+
+
+def _extract_sothebys_image(data: dict) -> str | None:
+    """Pick the largest rendition URL from Sothebys GraphQL response."""
+    try:
+        media = (data.get("data", {}).get("lot", {}) or {}).get("media")
+        if not media:
+            return None
+        images = media.get("images") or []
+        if not images:
+            return None
+        # Take first image's largest rendition (sorted by width desc)
+        rends = images[0].get("renditions") or []
+        if not rends:
+            return None
+        # Prefer ExtraLarge, else Large
+        for size in ("ExtraLarge", "Large"):
+            for r in rends:
+                if r.get("imageSize") == size and r.get("url"):
+                    return r["url"]
+        # Fallback: any url
+        for r in rends:
+            if r.get("url"):
+                return r["url"]
+    except (TypeError, AttributeError):
+        pass
+    return None
 
 
 def _extract_sothebys_bearer(page) -> str | None:
@@ -371,7 +408,19 @@ def _sothebys_direct_request(lot_url, bearer, probe=False, source_label="sotheby
         sample.write_text(_json.dumps(data, indent=2, ensure_ascii=False))
         print(f"      ◆ graphql JSON written to {sample}")
 
-    return _parse_sothebys_graphql_response(data)
+    amt, cur = _parse_sothebys_graphql_response(data)
+    if amt is not None:
+        # Image comes free with the same call — set it as side-effect
+        # via a module-level stash since the return type stays 2-tuple
+        # for callers that don't care.
+        _SOTHEBYS_LAST_IMAGE[0] = _extract_sothebys_image(data)
+    return amt, cur
+
+
+# Tiny module-level cache so the puller loop can read the image URL
+# after a hammer call without rewriting the whole signature.  Reset
+# per lot.
+_SOTHEBYS_LAST_IMAGE = [None]
 
 
 def _fetch_sothebys_hammer_via_api(page, lot_url, probe=False, source_label="sothebys"):
@@ -699,12 +748,15 @@ def _process_sothebys_direct(rows: list[dict], probe: bool) -> None:
         url = row["source_url"]
         print(f"\n  [{i}/{len(rows)}] {row['artist_name_raw']} | {(row.get('artwork_title') or '')[:50]}")
         print(f"      URL: {url[-80:]}")
+        _SOTHEBYS_LAST_IMAGE[0] = None  # reset per-lot stash
         amt, cur = _sothebys_direct_request(url, bearer, probe=probe, source_label="sothebys")
         if amt is None:
             n_fail += 1
         else:
-            print(f"      ✓ hammer = {cur} {amt:,.0f}")
-            if patch_hammer(row["id"], amt, cur, FX):
+            img = _SOTHEBYS_LAST_IMAGE[0]
+            img_note = f" + image" if img else ""
+            print(f"      ✓ hammer = {cur} {amt:,.0f}{img_note}")
+            if patch_hammer(row["id"], amt, cur, FX, image_url=img):
                 n_ok += 1
             else:
                 print("      ✗ DB patch failed")

@@ -441,6 +441,18 @@ def _build_record(lot, sale, lot_url, sale_url):
     except (TypeError, ValueError):
         premium_total = None
 
+    # catalog_description carries dims + reframing notes + literature
+    # references — surfaced on /sales/[id] when present.  Artcurial's
+    # 'comment' field is the canonical narrative block; combine with
+    # signature for completeness.
+    catalog_description = "\n".join(
+        s for s in [
+            _strip_html(signature),
+            _strip_html(comment),
+            _strip_html(bibliography),
+        ] if s
+    )[:2000]
+
     return {
         "source": "artcurial",
         "source_url": lot_url,
@@ -461,6 +473,7 @@ def _build_record(lot, sale, lot_url, sale_url):
         "currency": currency,
         "status": "sold",
         "provenance": provenance,
+        "catalog_description": catalog_description,
         "raw_snapshot": (title_fr + " | " + _strip_html(comment)[:300])[:500],
     }, artist_dict, artist_raw
 
