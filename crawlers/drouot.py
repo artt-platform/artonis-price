@@ -1105,7 +1105,22 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
         # a hammer price (any artist, not just VN — the indicator we care about
         # is whether Drouot is still serving results for this URL).
         if sale_date and sale_date < today_iso:
-            if results_seen > 0:
+            # Some sub-auctioneers (Pandolfini, Twents Veilinghuis,
+            # Adam's, Marambat-de-Malafosse, Millon Riviera — non-French
+            # or independent houses) publish only the sale metadata on
+            # drouot.com and keep the catalog on their own website.
+            # SvelteKit page exposes auctioneerCard.lotCount = 0 in that
+            # case.  Mark these sales resolved so the watchlist stops
+            # re-fetching them every 4h.  Operator audit 2026-06-28
+            # found 5 such sales in the 2026-06-25 batch that returned
+            # 0 lots through 3 attempts — none were a parser bug, they
+            # were genuinely Drouot-empty.
+            lot_count_match = re.search(r'lotCount:\s*(\d+)', r.text)
+            drouot_lot_count = int(lot_count_match.group(1)) if lot_count_match else None
+            if drouot_lot_count == 0:
+                _watchlist_mark(conn, sale_url, "resolved",
+                                note=f"empty: Drouot lotCount=0 ({auct_slug})")
+            elif results_seen > 0:
                 _watchlist_mark(conn, sale_url, "resolved",
                                 note=f"{results_seen} lots with results")
             else:
