@@ -39,20 +39,26 @@ H = {"apikey": KEY, "Authorization": f"Bearer {KEY}",
 OG_IMAGE_RE = re.compile(r'<meta\s+property="og:image"\s+content="([^"]+)"', re.IGNORECASE)
 # Christies serves a high-res LotImages URL inline (no og:image)
 CHRISTIES_IMG_RE = re.compile(r'(https://www\.christies\.com/img/LotImages/[^"\'\s]+\.(?:jpg|jpeg|png))', re.IGNORECASE)
+# Tajan stores lot images on Invaluable's CDN with _thz (thumbnail)
+# suffix — replace with empty for the full-size original.
+TAJAN_IMG_RE = re.compile(r'(https://image\.invaluable\.com/housePhotos/Tajan/[^"\'\s]+?)_thz\.jp(?:e?g)?', re.IGNORECASE)
 
 
 def fetch_og_image(url: str, source: str = "") -> str | None:
-    # Skip Millon-Vietnam mirror (not the canonical millon.com VN dept)
     if "millon-vietnam.com" in url:
         return None
-    # Skip synthetic 'manual-import' URLs — these were operator-entered
-    # placeholder URLs that don't resolve on the auction-house side.
-    # No image can be fetched; future inserts should record the real
-    # source URL when available.
     if "manual-import" in url:
         return None
+    # Tajan / some hosts 403 plain requests but accept cloudscraper's
+    # browser-like fingerprint.
+    needs_scraper = "tajan.com" in url
     try:
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        if needs_scraper:
+            import cloudscraper
+            scraper = cloudscraper.create_scraper()
+            r = scraper.get(url, timeout=20)
+        else:
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
     except Exception:
         return None
     if r.status_code != 200:
@@ -61,6 +67,11 @@ def fetch_og_image(url: str, source: str = "") -> str | None:
     if source == "christies":
         m = CHRISTIES_IMG_RE.search(r.text)
         return m.group(1) if m else None
+    # Tajan path: lot images live on Invaluable's housePhotos CDN
+    if source == "tajan":
+        m = TAJAN_IMG_RE.search(r.text)
+        # Promote _thz thumbnail URL to the full-size variant
+        return f"{m.group(1)}.jpg" if m else None
     m = OG_IMAGE_RE.search(r.text)
     if not m:
         return None
@@ -112,11 +123,11 @@ def process(source: str, limit: int) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=["bonhams", "aguttes", "millon", "christies", "everard", "all"], default="all")
+    ap.add_argument("--source", choices=["bonhams", "aguttes", "millon", "christies", "everard", "phillips", "artcurial", "tajan", "all"], default="all")
     ap.add_argument("--limit", type=int, default=200)
     args = ap.parse_args()
 
-    sources = ("bonhams", "aguttes", "millon", "christies", "everard") if args.source == "all" else (args.source,)
+    sources = ("bonhams", "aguttes", "millon", "christies", "everard", "phillips", "artcurial", "tajan") if args.source == "all" else (args.source,)
     for s in sources:
         process(s, args.limit)
 
