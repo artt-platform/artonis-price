@@ -342,7 +342,13 @@ def _parse_dimensions_from_properties(props):
 
 
 def _parse_dimensions_from_text(*texts):
-    """Fallback: scan signature/comment/technique for 'NN x NN cm' literal."""
+    """Fallback: scan signature/comment/technique for 'NN x NN cm' literal.
+
+    Some Artcurial lots only carry the inch dim in 'comment' (e.g.
+    '21,50 x 18,11 in.') without ever populating properties.height /
+    width.  Convert the inch pair to cm when only that form is
+    present.  The cm form always wins when both are stated.
+    """
     blob = " ".join(_strip_html(t) for t in texts if t)
     m = re.search(
         r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm",
@@ -350,6 +356,17 @@ def _parse_dimensions_from_text(*texts):
     )
     if m:
         return f"{m.group(1).replace(',', '.')} x {m.group(2).replace(',', '.')} cm"
+    # Inch fallback — Artcurial inch values use comma as decimal sep.
+    m_in = re.search(
+        r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*in\.?",
+        blob, re.IGNORECASE,
+    )
+    if m_in:
+        a_in = float(m_in.group(1).replace(",", "."))
+        b_in = float(m_in.group(2).replace(",", "."))
+        a_cm = round(a_in * 2.54, 1)
+        b_cm = round(b_in * 2.54, 1)
+        return f"{a_cm} x {b_cm} cm"
     return ""
 
 
@@ -389,7 +406,12 @@ def _build_record(lot, sale, lot_url, sale_url):
     desc = (lot.get("descriptions") or {}).get("FRENCH") or {}
     title_fr = _strip_html(desc.get("titleWithHtml") or "")
     medium = clean_text(desc.get("technique") or "")
-    signature = desc.get("signature") or ""
+    # Artcurial moved signature content into descriptionWithHtml mid-
+    # 2024 — older sale catalogs still populate 'signature', newer
+    # ones leave it empty and put the same prose into
+    # 'descriptionWithHtml'.  Read whichever is present (the two never
+    # carry distinct content on the same lot).
+    signature = desc.get("signature") or desc.get("descriptionWithHtml") or ""
     origin = desc.get("origin") or ""           # provenance lives here
     comment = desc.get("comment") or ""
     bibliography = desc.get("bibliography") or ""
