@@ -308,6 +308,30 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
     if m_sale:
         sale_name = m_sale.group(1).strip()
 
+    # Sale date — operator-flagged 2026-06-28: 33Auction page exposes
+    # a clear 'Auction details … <SaleName> Month DD, YYYY' block.
+    # Same pattern works for Joshua Kodner / Akiba layouts.
+    sale_date = None
+    _MONTHS = {"January":1,"February":2,"March":3,"April":4,"May":5,"June":6,
+               "July":7,"August":8,"September":9,"October":10,"November":11,"December":12}
+    m_date = re.search(
+        r'(' + '|'.join(_MONTHS) + r')\s+(\d{1,2}),\s+(\d{4})',
+        body,
+    )
+    if m_date:
+        sale_date = f"{m_date.group(3)}-{_MONTHS[m_date.group(1)]:02d}-{int(m_date.group(2)):02d}"
+
+    # Hammer + currency from 'Sold: XXX 5,800.00' line that 33Auction
+    # renders when the lot actually sold.  Overrides the upstream
+    # parser's blanket hammer=None.
+    m_hammer = re.search(r'Sold:\s*([A-Z]{3})\s*([\d,]+(?:\.\d+)?)', body)
+    if m_hammer and not hammer:
+        try:
+            hammer = float(m_hammer.group(2).replace(",", ""))
+            currency = m_hammer.group(1)
+        except ValueError:
+            pass
+
     return {
         "source": "auction_catalog",
         "via_platform": "auction_catalog",
@@ -315,7 +339,7 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
         "sale_page_url": "",
         "lot_number": lot_no,
         "auction_title": sale_name[:200],
-        "sale_date": None,
+        "sale_date": sale_date,
         "sale_location": host_location,
         "artist_name_raw": artist,
         "artwork_title": title[:200],
