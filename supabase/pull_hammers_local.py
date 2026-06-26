@@ -88,8 +88,10 @@ def fetch_missing_hammers(source: str, limit: int) -> list[dict]:
         "hammer_price": "is.null",
         "source_url": "not.is.null",
         # Exclude lots we already know didn't sell — saves rate-limit
-        # budget for lots that might have a real hammer
-        "status": "not.in.(passed,unsold,withdrawn)",
+        # budget for lots that might have a real hammer.  Only enum
+        # values actually in sale_status; 'unsold' isn't one of them
+        # so don't list it (PostgREST 400s on unknown enum members).
+        "status": "not.in.(passed,withdrawn)",
         "order": "estimate_low.desc.nullslast,sale_date.desc.nullslast",
         "limit": str(limit),
     }
