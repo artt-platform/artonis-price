@@ -154,24 +154,43 @@ def parse_lot_page(lot_url):
         m2 = re.match(r"^(.+?)\s*-\s*Lot\s*\d+", h1)
         artist_raw = (m2.group(1) if m2 else h1).strip()
 
-    # Estimation: "Estimation : 4000 - 6000 EUR"
+    # Estimation: "Estimation : 4000 - 6000 EUR" or bare
+    # "25000 - 35000 EUR" (newer G&D layout drops the label).
     est_low = est_high = None
+    currency = "EUR"
     m = re.search(r"Estimation\s*[:\s]+(\d[\d\s]*)\s*(?:-|–|à)\s*(\d[\d\s]*)\s*(EUR|USD|HKD|GBP|CHF)", text)
     if m:
         est_low = float(m.group(1).replace(" ", ""))
         est_high = float(m.group(2).replace(" ", ""))
         currency = m.group(3)
     else:
-        currency = "EUR"
+        # Fallback for newer G&D lot pages — they render the estimate
+        # band as a plain '25000 - 35000 EUR' line above the result.
+        m2 = re.search(r"(\d[\d\s]{2,})\s*[-–]\s*(\d[\d\s]{2,})\s*(EUR|USD|HKD|GBP|CHF)\b", text)
+        if m2:
+            est_low = float(m2.group(1).replace(" ", ""))
+            est_high = float(m2.group(2).replace(" ", ""))
+            currency = m2.group(3)
 
-    # Result (without fees) — that's the hammer
+    # Result (without fees) — that's the hammer.  G&D ships two
+    # rendering styles depending on the catalog template:
+    #   English layout:  'Result : 3 300EUR'
+    #   French layout:   'Résultat : 220 000EUR'     ← operator-flagged 2026-06-26
+    # Both join the currency to the number without a space.
     hammer = None
-    m = re.search(r"Result\s*[:\s]+(\d[\d\s]*)\s*(EUR|USD|HKD|GBP|CHF)", text, re.IGNORECASE)
+    m = re.search(
+        r"(?:Résultat|Resultat|Result)\s*[:\s]+(\d[\d\s]*)\s*(EUR|USD|HKD|GBP|CHF)",
+        text, re.IGNORECASE,
+    )
     if m:
         hammer = float(m.group(1).replace(" ", ""))
     # Result with fees → premium price
     premium = None
-    m = re.search(r"Result\s+with\s+fees?\s*[:\s]+(\d[\d\s]*)\s*(EUR|USD|HKD|GBP|CHF)", text, re.IGNORECASE)
+    m = re.search(
+        r"(?:Résultat|Resultat|Result)\s+(?:avec frais|with fees?)\s*[:\s]+"
+        r"(\d[\d\s]*)\s*(EUR|USD|HKD|GBP|CHF)",
+        text, re.IGNORECASE,
+    )
     if m:
         premium = float(m.group(1).replace(" ", ""))
 
