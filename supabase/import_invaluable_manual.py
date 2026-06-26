@@ -89,6 +89,21 @@ def mark_passed(row_id: int) -> bool:
     return r.status_code < 300
 
 
+def mark_sold_hidden(row_id: int) -> bool:
+    """Some lots show 'Sold' but no price even with login (consignor
+    privacy).  Record that we observed a sale without overwriting the
+    hammer slot, so the lot stops re-appearing in the queue."""
+    r = requests.patch(f"{URL}/rest/v1/sale_results",
+                       params={"id": f"eq.{row_id}"},
+                       headers=H, json={"status": "sold_hidden"}, timeout=10)
+    if r.status_code >= 300:
+        # Fall back to 'unknown' if the enum doesn't have sold_hidden
+        r = requests.patch(f"{URL}/rest/v1/sale_results",
+                           params={"id": f"eq.{row_id}"},
+                           headers=H, json={"status": "unknown"}, timeout=10)
+    return r.status_code < 300
+
+
 def parse_amount_currency(text: str) -> tuple[float, str] | None:
     """Parse '$5,000' / '5000 USD' / 'HKD 1,200,000' / '5,000'."""
     text = text.strip().replace(",", "")
@@ -137,10 +152,11 @@ def main() -> None:
     print("    - Read the hammer price on the page")
     print("    - Type 'hammer currency' (e.g. '5000 USD') and press Enter")
     print("    - Or type 'p' if the lot passed/unsold")
+    print("    - Or type 'h' if page shows 'Sold' but price hidden")
     print("    - Or type 's' to skip this lot, 'q' to quit")
     print()
 
-    n_ok = n_passed = n_skipped = 0
+    n_ok = n_passed = n_skipped = n_hidden = 0
     for i, row in enumerate(rows, 1):
         title = (row.get("artwork_title") or "")[:60]
         print(f"\n[{i}/{len(rows)}] {row['artist_name_raw']} | {title}")
@@ -151,7 +167,7 @@ def main() -> None:
         print(f"  URL: {row['source_url']}")
         while True:
             try:
-                ans = input("  hammer (e.g. '5000 USD' / p=passed / s=skip / q=quit): ").strip()
+                ans = input("  hammer (e.g. '5000 USD' / p=passed / h=sold-hidden / s=skip / q=quit): ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\nAborted.")
                 return
@@ -159,7 +175,7 @@ def main() -> None:
                 continue
             if ans.lower() == "q":
                 print("Quit.")
-                _summarize(n_ok, n_passed, n_skipped)
+                _summarize(n_ok, n_passed, n_skipped, n_hidden)
                 return
             if ans.lower() == "s":
                 n_skipped += 1
@@ -168,6 +184,13 @@ def main() -> None:
                 if mark_passed(row["id"]):
                     n_passed += 1
                     print(f"  → marked passed")
+                else:
+                    print(f"  ✗ DB patch failed")
+                break
+            if ans.lower() == "h":
+                if mark_sold_hidden(row["id"]):
+                    n_hidden += 1
+                    print(f"  → marked sold (price hidden)")
                 else:
                     print(f"  ✗ DB patch failed")
                 break
@@ -184,13 +207,14 @@ def main() -> None:
                 print(f"  ✗ DB patch failed")
             break
 
-    _summarize(n_ok, n_passed, n_skipped)
+    _summarize(n_ok, n_passed, n_skipped, n_hidden)
 
 
-def _summarize(n_ok: int, n_passed: int, n_skipped: int) -> None:
+def _summarize(n_ok: int, n_passed: int, n_skipped: int, n_hidden: int = 0) -> None:
     print()
     print("=" * 70)
-    print(f"  Done: {n_ok} hammer + {n_passed} passed + {n_skipped} skipped")
+    parts = [f"{n_ok} hammer", f"{n_passed} passed", f"{n_hidden} sold-hidden", f"{n_skipped} skipped"]
+    print(f"  Done: " + " + ".join(parts))
     print("=" * 70)
     print("\n  Refreshing artist stats…")
     import subprocess
