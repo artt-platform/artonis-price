@@ -907,6 +907,7 @@ def crawl(conn, sale_urls=None, delay=1.0, verbose=True, filter_vn=True, max_pag
         # Skip whole sale if auctioneer is one of our dedicated-crawler houses —
         # avoids duplicate rows for the same lot under different `source`.
         auct_slug = (sale_info.get("auctioneer_slug") or "").lower()
+        auctioneer_name = sale_info.get("auctioneer_name") or ""
         if _is_skip_auctioneer(auct_slug):
             if verbose:
                 print(f"  [{i}/{len(sale_urls)}] skip {auct_slug} sale "
