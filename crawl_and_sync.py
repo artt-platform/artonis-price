@@ -200,6 +200,15 @@ def sync_to_supabase(conn, source, since_scraped_at):
         if sup and sup not in ('canvas', 'silk', 'paper', 'lacquer', 'panel', 'metal'):
             sup = None
         d['support_type'] = sup
+        # Don't clobber existing image_phash / image_url on Supabase
+        # with NULLs from SQLite.  The dedup detector + admin pages
+        # both depend on these — earlier sync rounds nuked ~200
+        # Bonhams and ~100 Artcurial images that the og:image
+        # backfill had populated, because SQLite hadn't observed
+        # them yet.  Strip the keys when null so PostgREST UPSERT
+        # leaves the existing row value alone.
+        if not d.get('image_url'): d.pop('image_url', None)
+        if not d.get('image_phash'): d.pop('image_phash', None)
         payload.append(d)
 
     # Batch insert
