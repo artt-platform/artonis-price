@@ -69,3 +69,26 @@ for aid, a in agg.items():
     if r.ok: ok += 1
     else: print(f"  ERR #{aid}: {r.status_code}")
 print(f"\nDone. {ok}/{len(agg)} artists updated.")
+
+# Reset orphans — artists whose stored auction_count > 0 but who no
+# longer have any priced lots.  Without this, an artist whose lots
+# were deleted (e.g. estimate_only cleanup 2026-06-26) keeps a stale
+# auction_count and stays visible on /artists with no real data.
+print("\nLooking for orphaned counts to clear…")
+all_artists = requests.get(
+    f"{URL}/rest/v1/artists?select=id,auction_count&limit=500",
+    headers={'apikey': KEY}, timeout=30,
+).json()
+zeroed = 0
+for a in all_artists:
+    if (a.get('auction_count') or 0) > 0 and a['id'] not in agg:
+        r = requests.patch(
+            f"{URL}/rest/v1/artists?id=eq.{a['id']}",
+            headers={**H, 'Prefer': 'return=minimal'},
+            json={'auction_count': 0,
+                  'overall_min_usd': None, 'overall_max_usd': None,
+                  'overall_avg_usd': None},
+            timeout=30,
+        )
+        if r.ok: zeroed += 1
+print(f"Cleared {zeroed} orphans.")
