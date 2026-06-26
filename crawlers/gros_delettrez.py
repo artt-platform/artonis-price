@@ -237,6 +237,17 @@ def parse_lot_page(lot_url):
                     medium = after_title[:m_first_dim_pos.start()].strip(" .,;")
                     medium = medium[:200]
 
+    # Image URL — Gros & Delettrez stores lot photos on Drouot's CDN
+    # (cdn.drouot.com/d/image/lot?…).  The og:image tag itself points
+    # to the house logo; the real lot thumbnail is rendered inside
+    # the search-result card.  The lot detail page also references
+    # the same URL inline.  Pick the first <img> whose src points at
+    # cdn.drouot.com.
+    image_url = None
+    m_img = re.search(r'<img[^>]+src="(https?://cdn\.drouot\.com/[^"]*lot[^"]*)"', raw)
+    if m_img:
+        image_url = m_img.group(1).replace("&amp;", "&")
+
     # Cleanup artist
     artist_clean, _ = clean_artist_name(artist_raw)
     return {
@@ -254,6 +265,7 @@ def parse_lot_page(lot_url):
         "price_with_premium": premium,
         "currency": currency,
         "status": "sold" if hammer else "estimate",
+        "image_url": image_url,
     }
 
 
