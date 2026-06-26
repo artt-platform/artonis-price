@@ -99,6 +99,29 @@ def is_fake_or_copy(title, description=""):
     return False
 
 
+def fetch_auction_title(auction_id):
+    """Look up the real sale name via Typesense's `auctions` collection.
+    Bonhams's lot document only carries department.name (classification);
+    the operator-facing sale name (e.g. 'Vietnamese Art Online') lives
+    on the auction record.  Cached per-process."""
+    if not auction_id:
+        return None
+    if auction_id in _AUCTION_TITLE_CACHE:
+        return _AUCTION_TITLE_CACHE[auction_id]
+    body = {"searches":[{"collection":"auctions","q":"*","filter_by":f"id:={auction_id}","per_page":1}]}
+    try:
+        r = requests.post(API_URL, json=body, headers=HEADERS, timeout=15).json()
+        hits = r.get("results", [{}])[0].get("hits", [])
+        title = hits[0]["document"].get("auctionTitle") if hits else None
+    except Exception:
+        title = None
+    _AUCTION_TITLE_CACHE[auction_id] = title
+    return title
+
+
+_AUCTION_TITLE_CACHE: dict[str, str | None] = {}
+
+
 def search_bonhams(query, per_page=100, max_pages=5, status_filter="SOLD", department=None):
     """Search Bonhams Typesense API for lots matching query.
     We intentionally do NOT exclude catalogDesc/footnotes so we get medium + dimensions."""
@@ -394,7 +417,14 @@ def parse_lot(doc):
         "source_url": source_url,
         "sale_page_url": sale_page_url,
         "lot_number": lot_no,
-        "auction_title": f"{auction_house} — {dept}" if dept else auction_house,
+        # Prefer the real auction title (operator-facing sale name) over
+        # the department classification.  Falls back to department then
+        # bare auction_house when the auctions API doesn't return.
+        "auction_title": (
+            f"{auction_house} — {fetch_auction_title(auction_id)}"
+            if fetch_auction_title(auction_id)
+            else f"{auction_house} — {dept}" if dept else auction_house
+        ),
         "sale_date": sale_date,
         "sale_location": country,
         "artist_name_raw": artist,
