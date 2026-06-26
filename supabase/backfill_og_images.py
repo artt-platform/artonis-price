@@ -45,6 +45,12 @@ def fetch_og_image(url: str, source: str = "") -> str | None:
     # Skip Millon-Vietnam mirror (not the canonical millon.com VN dept)
     if "millon-vietnam.com" in url:
         return None
+    # Skip synthetic 'manual-import' URLs — these were operator-entered
+    # placeholder URLs that don't resolve on the auction-house side.
+    # No image can be fetched; future inserts should record the real
+    # source URL when available.
+    if "manual-import" in url:
+        return None
     try:
         r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
     except Exception:
@@ -106,11 +112,11 @@ def process(source: str, limit: int) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=["bonhams", "aguttes", "millon", "christies", "all"], default="all")
+    ap.add_argument("--source", choices=["bonhams", "aguttes", "millon", "christies", "everard", "all"], default="all")
     ap.add_argument("--limit", type=int, default=200)
     args = ap.parse_args()
 
-    sources = ("bonhams", "aguttes", "millon", "christies") if args.source == "all" else (args.source,)
+    sources = ("bonhams", "aguttes", "millon", "christies", "everard") if args.source == "all" else (args.source,)
     for s in sources:
         process(s, args.limit)
 
