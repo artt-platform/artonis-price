@@ -262,10 +262,22 @@ def crawl_artist(page, slug, canonical_name, timeout=40000):
             "dimensions": parsed.get("dimensions", ""),
             "estimate_low": parsed.get("estimate_low"),
             "estimate_high": parsed.get("estimate_high"),
-            # Use midpoint of estimate as "hammer" proxy since hammer requires login
-            "hammer_price": ((parsed.get("estimate_low") or 0) + (parsed.get("estimate_high") or 0)) / 2 or None,
+            # HARD RULE (operator 2026-06-27, 3rd recurrence of midpoint-
+            # hammer bug — see feedback_midpoint_hammer_bug + feedback_
+            # never_show_estimate_only memory notes).  NEVER synthesise
+            # hammer_price from estimate.  Invaluable card listings hide
+            # the real Sold amount behind a login wall; em was previously
+            # storing midpoint(low,high) and even midpoint × 1.1 as
+            # 'hammer', which propagated to fake price_usd and showed up
+            # as a real transaction on /artists.  Operator caught lot
+            # 19312 (Bùi Xuân Phái OXIO Asian Art, est €1,000-1,500)
+            # showing hammer €1,375 (= midpoint × 1.1) when the real
+            # Sold was €950.  Insert without hammer; status stays
+            # estimate_only so the UI filter hides the row entirely
+            # until a real Sold price can be PATCHed in.
+            "hammer_price": None,
             "currency": parsed.get("currency", "USD"),
-            "status": "estimate_only",  # mark that this is estimate, not realized
+            "status": "estimate_only",
             "raw_snapshot": card["text"][:500],
             # Card thumbnail — fetched from the Invaluable artist-listing
             # page where CF is more permissive than the lot-detail page.
@@ -273,8 +285,7 @@ def crawl_artist(page, slug, canonical_name, timeout=40000):
             # backfill_og_images.py won't try to refetch these.
             "image_url": (card.get("image") or None),
         }
-        if rec["hammer_price"]:
-            records.append(rec)
+        records.append(rec)
     return records, None
 
 
