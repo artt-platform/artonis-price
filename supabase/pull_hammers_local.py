@@ -123,11 +123,21 @@ def patch_image_only(row_id: int, image_url: str) -> bool:
     return pr.status_code < 300
 
 
+def _premium_pct_for(source: str) -> float:
+    """Buyer's premium rate (%) for a given source.  Looks up the
+    registry in data/auction_houses.py; falls back to 25% only when
+    the source isn't catalogued.  Centralised so every puller +
+    importer derives premium the same way."""
+    from data.auction_houses import AUCTION_HOUSES
+    return (AUCTION_HOUSES.get(source) or {}).get("premium_rate_pct", 25.0)
+
+
 def patch_hammer(row_id: int, hammer: float, currency: str, fx: dict,
-                 image_url: str | None = None) -> bool:
+                 image_url: str | None = None, source: str = "") -> bool:
     fx_to_usd = fx.get(currency.upper(), 1.0)
     price_usd = round(hammer * fx_to_usd, 2)
-    premium = round(hammer * 1.25, 2)  # default 25% buyer premium
+    rate_pct = _premium_pct_for(source)
+    premium = round(hammer * (1 + rate_pct / 100), 2)
     premium_usd = round(premium * fx_to_usd, 2)
     # Get area + existing image for $/m² + don't overwrite image
     rr = requests.get(f"{URL}/rest/v1/sale_results",
@@ -780,7 +790,7 @@ def _process_sothebys_direct(rows: list[dict], probe: bool) -> None:
         else:
             img_note = f" + image" if img else ""
             print(f"      ✓ hammer = {cur} {amt:,.0f}{img_note}")
-            if patch_hammer(row["id"], amt, cur, FX, image_url=img):
+            if patch_hammer(row["id"], amt, cur, FX, image_url=img, source="sothebys"):
                 n_ok += 1
             else:
                 print("      ✗ DB patch failed")
@@ -993,7 +1003,7 @@ def process_source(source: str, cookie: str, domain: str,
                     print(f"      ◆ HTML sample written to {sample}")
             else:
                 print(f"      ✓ hammer = {cur} {amt:,.0f}")
-                if patch_hammer(row["id"], amt, cur, FX):
+                if patch_hammer(row["id"], amt, cur, FX, source=row.get("source", "")):
                     n_ok += 1
                 else:
                     print("      ✗ DB patch failed")

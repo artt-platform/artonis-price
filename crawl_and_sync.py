@@ -23,6 +23,12 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
+
+# Centralised list of Supabase-authoritative columns.  See module
+# docstring for the rule — every column populated by a script in
+# supabase/*.py outside the crawl path must appear there.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from supabase.sync_protect import strip_authoritative, push_safe_status  # noqa: E402
 import requests
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -200,59 +206,11 @@ def sync_to_supabase(conn, source, since_scraped_at):
         if sup and sup not in ('canvas', 'silk', 'paper', 'lacquer', 'panel', 'metal'):
             sup = None
         d['support_type'] = sup
-        # SUPABASE-AUTHORITATIVE COLUMNS — never overwrite from SQLite.
-        #
-        # PostgREST UPSERT with on_conflict=source_url overwrites every
-        # column we send.  SQLite is the canonical store for crawler-
-        # observed fields (source_url, title, dim from listing card,
-        # etc.) but NOT for fields populated post-sync by Supabase-only
-        # scripts.  When those scripts write a value, the next sync
-        # round sends back the SQLite version (usually NULL or stale)
-        # and silently wipes the improvement.
-        #
-        # Three recurrences of this bug class across 2026-06:
-        #   - 2026-06-27 round 1: 230 Bonhams + 150 Artcurial image_url wiped
-        #   - 2026-06-27 round 2: 147 Sothebys HK hammers wiped
-        #   - 2026-06-27 round 3 (this fix): codebase audit found another 8
-        #     columns at risk from sweep_invaluable_titles, llm_extract_fields,
-        #     fix_dim_orientation, backfill_millon_estimates.
-        #
-        # Rule: if a Supabase-side script writes column X, X must be in
-        # the strip list below.  Use `is None` (not falsy) so legitimate
-        # zero values still pass through.  An empty string is treated
-        # as None — SQLite stores empty for "not observed".
-        _SUPABASE_AUTHORITATIVE = (
-            # Images (backfill_og_images.py, og:image crawler-level fills)
-            'image_url', 'image_phash',
-            # Hammers (Pull_Sothebys, pull_drouot_hammers,
-            # pull_invaluable_hammers, manual operator PATCH)
-            'hammer_price', 'price_with_premium',
-            'price_usd', 'price_with_premium_usd',
-            'price_per_m2_usd', 'currency',
-            # Orientation + area (fix_dim_orientation.py)
-            'width_cm', 'height_cm', 'area_m2', 'dimensions',
-            # LLM-extracted text fields (llm_extract_fields.py)
-            'medium', 'year', 'provenance', 'artwork_title',
-            'catalog_description',
-            # Estimate backfill (backfill_millon_estimates.py)
-            'estimate_low', 'estimate_high',
-            # Sweep-fixed metadata (sweep_invaluable_titles.py)
-            'auction_title', 'sale_date', 'sale_location',
-            # Operator-set cluster (cluster_resales.py)
-            'artwork_uuid',
-        )
-        for k in _SUPABASE_AUTHORITATIVE:
-            v = d.get(k)
-            if v is None or v == '':
-                d.pop(k, None)
-        # Status is the most delicate: 'sold' set by a hammer puller
-        # must beat 'estimate_only' / 'estimate' from SQLite.  Only
-        # push status when it's a confirmed terminal state ('sold',
-        # 'passed', 'withdrawn').  'estimate' (Larasati legacy) and
-        # 'estimate_only' (every other crawler's default) leave the
-        # Supabase value alone.
-        if d.get('status') in (None, '', 'estimate', 'estimate_only', 'unknown'):
-            d.pop('status', None)
+        # Drop every column owned by a Supabase-side script when
+        # SQLite has null/empty.  Canonical list lives in
+        # supabase/sync_protect.py — add new columns there, not here.
+        strip_authoritative(d)
+        push_safe_status(d)
         payload.append(d)
 
     # Batch insert

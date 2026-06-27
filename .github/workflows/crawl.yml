@@ -4,6 +4,18 @@ name: Crawl auctions
 #   - Daily 02:00 UTC (= 09:00 ICT): fast sources only (no Playwright)
 #   - Weekly Sunday 19:00 UTC (= 02:00 Mon ICT): full crawl + refresh stats
 #   - Manual: pick sources via dropdown
+
+# Serialise every scheduled run + manual dispatch behind a single
+# concurrency lock.  Operator 2026-06-27 audit flagged the 4-hourly
+# Drouot refetch firing at 04:00 UTC while the daily 02:00 crawl was
+# still running — both write to the same SQLite file and push the
+# same source_urls to PostgREST, so the later writer's empty values
+# could revert the earlier writer's fills.  cancel-in-progress=false
+# means the second run waits instead of killing the first.
+concurrency:
+  group: crawl-and-sync
+  cancel-in-progress: false
+
 on:
   schedule:
     - cron: '0 2 * * *'    # daily 09:00 ICT — full crawl all sources

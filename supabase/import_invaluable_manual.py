@@ -61,10 +61,15 @@ def fetch_queue(limit: int) -> list[dict]:
     return r.json() if r.ok else []
 
 
-def patch_hammer(row_id: int, hammer: float, currency: str, area_m2: float | None) -> bool:
+def patch_hammer(row_id: int, hammer: float, currency: str, area_m2: float | None,
+                 source: str = "") -> bool:
     fx = FX.get(currency.upper(), 1.0)
     price_usd = round(hammer * fx, 2)
-    premium = round(hammer * 1.25, 2)
+    # House-specific buyer premium from data/auction_houses.py.
+    # Falls back to 25% only when source isn't catalogued.
+    from data.auction_houses import AUCTION_HOUSES
+    rate_pct = (AUCTION_HOUSES.get(source) or {}).get("premium_rate_pct", 25.0)
+    premium = round(hammer * (1 + rate_pct / 100), 2)
     premium_usd = round(premium * fx, 2)
     ppm = round(price_usd / area_m2, 2) if area_m2 else None
     payload = {
@@ -199,7 +204,8 @@ def main() -> None:
                 print(f"  ✗ couldn't parse {ans!r} — try '5000 USD' or '$5,000'")
                 continue
             hammer, cur = parsed
-            if patch_hammer(row["id"], hammer, cur, row.get("area_m2")):
+            if patch_hammer(row["id"], hammer, cur, row.get("area_m2"),
+                            source=row.get("source", "")):
                 fx = FX.get(cur, 1.0)
                 print(f"  ✓ {cur} {hammer:,.0f} → ${hammer * fx:,.0f} USD saved")
                 n_ok += 1

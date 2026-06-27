@@ -90,7 +90,14 @@ def patch_hammer(row_id: int, hammer: float, currency: str) -> bool:
     area = row.get("area_m2") if row else None
 
     price_usd = round(hammer * fx, 2)
-    premium = round(hammer * 1.25, 2)         # +25% buyer premium default
+    # House-specific buyer premium via data/auction_houses.py.
+    # Falls back to 25% only when the upstream house isn't in the
+    # registry.  Manual imports run against Invaluable lots so we
+    # key by sale_location (Invaluable upstream label), not source.
+    from data.auction_houses import AUCTION_HOUSES
+    house = ((row or {}).get("sale_location") or "").lower().strip()
+    rate_pct = (AUCTION_HOUSES.get(house) or {}).get("premium_rate_pct", 25.0)
+    premium = round(hammer * (1 + rate_pct / 100), 2)
     premium_usd = round(premium * fx, 2)
     ppm_usd = round(price_usd / area, 2) if area else None
 

@@ -128,11 +128,15 @@ def main():
             m_cur = _CURRENCY_RE.search(r.text)
             if m_cur:
                 currency = m_cur.group(1)
-            # Invaluable typical buyer's premium = 25% of hammer.
-            # (House-specific rates vary; 25% is the canonical default
-            # the rest of the Artonis stack uses — pull_hammers_local +
-            # import_invaluable_hammer both apply it.)
-            premium = round(sold_val * 1.25, 2)
+            # Look up the actual upstream house's premium rate
+            # (Invaluable lots store the house as sale_location, not
+            # `source`).  Falls back to 25% when the house isn't in
+            # data/auction_houses.py.  Centralised lookup so every
+            # puller derives premium the same way.
+            from data.auction_houses import AUCTION_HOUSES
+            upstream = (row.get("sale_location") or "").lower().strip()
+            rate_pct = (AUCTION_HOUSES.get(upstream) or {}).get("premium_rate_pct", 25.0)
+            premium = round(sold_val * (1 + rate_pct / 100), 2)
             price_usd, _ = to_usd(sold_val, currency)
             premium_usd, _ = to_usd(premium, currency)
             patch = {
