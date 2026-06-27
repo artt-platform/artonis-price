@@ -42,6 +42,12 @@ DIRECT_OWNED_HOUSE_NAMES = {
     "gros and delettrez",
     "gros delettrez",
     "millon",
+    # Invaluable surfaces Millon vente 2120 (and other Vietnamese Millon
+    # sales) under the upstream label 'Asium' — same lots, same hammers,
+    # same dim, often even same image_phash.  Operator caught 5 Pham
+    # Hau dup pairs 2026-06-27 from sale 2019-06-14.  Aliased here so
+    # the Invaluable crawler skips them like any other Millon lot.
+    "asium",
     # Asia
     "ravenel",
     # Vietnam
