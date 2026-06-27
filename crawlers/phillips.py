@@ -243,6 +243,14 @@ def parse_sale_page(text, sale_url):
         auction_name = sale_meta.get("auction_name", "") or "Phillips"
         auction_title = f"Phillips — {auction_name}"
 
+        # Image — Phillips serves lot photos from dist.phillips.com
+        # with a per-auction directory keyed by sale slug + lot id
+        # (e.g. /auction-assets/HK010925/224834_001.jpg).  The tile
+        # markup also carries narrow-crop and offset variants; we
+        # take the first <img> inside the chunk verbatim.
+        img_m = re.search(r'<img[^>]+(?:src|data-src)="(https?://[^"]+)"', chunk)
+        image_url = _html_lib.unescape(img_m.group(1)) if img_m else None
+
         rec = {
             "source": "phillips",
             "source_url": lot_url,
@@ -263,6 +271,7 @@ def parse_sale_page(text, sale_url):
             "currency": currency,
             "status": status,
             "provenance": "",
+            "image_url": image_url,
             "raw_snapshot": f"{artist_raw} | {artwork_title[:100]}"[:300],
             "_phillips_lot_id": lot_id,
         }
