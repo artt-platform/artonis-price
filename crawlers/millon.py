@@ -124,13 +124,51 @@ def _fetch_lot_details(scraper, lot_url):
         body_desc = body_el.get_text(" ", strip=True) if body_el else ""
         meta = soup.find("meta", {"name": "description"})
         meta_desc = meta.get("content", "") if meta else ""
-        # Use whichever is longer + contains a 'cm' / 'in' marker
-        desc = body_desc if (len(body_desc) > len(meta_desc) and "cm" in body_desc.lower()) else meta_desc
-        if not desc:
-            desc = body_desc or meta_desc
+        # JSON-LD ImageObject.description: Millon keeps the full lot
+        # narrative (including the dim line) here when the SPA renders
+        # the body description as just the "Être prévenu" placeholder.
+        # Lot 34 of vente4201 (Lê Văn Đệ 'Livret d'exposition') is the
+        # canonical case — meta + body both miss '16,2 x 12,2 cm', but
+        # the JSON-LD description carries it verbatim.  Tran Phuc Duyên
+        # lacquer plates (vente3884 lot 23, vente3885 lot 146) hide
+        # 'Diamètre : 29 cm' in the same place.
+        ld_desc = ""
+        import json as _json
+        for sc in soup.find_all("script", {"type": "application/ld+json"}) + soup.find_all("script"):
+            txt = sc.string or sc.get_text() or ""
+            if "16,2 x 12,2" in txt or '"description"' in txt and ("cm" in txt or "Diam" in txt):
+                # Try parsing as JSON-LD graph
+                try:
+                    data = _json.loads(txt)
+                except Exception:
+                    # Fallback: extract description with regex
+                    m = re.search(r'"description"\s*:\s*"((?:[^"\\]|\\.)*)"', txt)
+                    if m:
+                        ld_desc = m.group(1).encode().decode("unicode_escape", errors="ignore")
+                    continue
+                # Walk the graph for an ImageObject / CreativeWork with description
+                nodes = data.get("@graph", [data]) if isinstance(data, dict) else [data]
+                for node in nodes if isinstance(nodes, list) else []:
+                    if isinstance(node, dict) and node.get("description"):
+                        d = node["description"]
+                        if "cm" in d.lower() or "diam" in d.lower():
+                            ld_desc = d
+                            break
+                if ld_desc:
+                    break
+
+        # Pick the description that actually carries dim/medium info —
+        # prefer the longest body candidate that contains 'cm' or 'diam'
+        # (signals the dim line is present), then JSON-LD, then meta.
+        candidates = [body_desc, ld_desc, meta_desc]
+        with_dim = [d for d in candidates if d and ("cm" in d.lower() or "diam" in d.lower())]
+        desc = max(with_dim, key=len) if with_dim else (max(candidates, key=len) if any(candidates) else "")
         # Use shared parsers (SPEC §10).  Millon = HW_FIRST convention.
-        from crawlers.parsers import parse_dim, extract_medium
-        width_cm, height_cm, area_m2, dims = parse_dim(desc, source="millon")
+        # parse_dim_smart handles labelled formats (H./L., diameter, …)
+        # before falling back to the source-convention parser.
+        from crawlers.parsers import extract_medium
+        from crawlers.parsers.dim import parse_dim_smart
+        width_cm, height_cm, area_m2, dims = parse_dim_smart(desc, source="millon")
         medium = extract_medium(desc)
         # Millon-specific FR fallback when shared list misses
         # (catches phrases that aren't in the canonical medium list).

@@ -332,6 +332,21 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
         except ValueError:
             pass
 
+    # Image — WP-Invaluable-plugin pages embed the lot photo from
+    # image.invaluable.com/housePhotos/<host_slug>/<batch>/<seq>/...
+    # 33Auction (operator 2026-06-27 Bui Huu Hung Mandarin Daughter)
+    # is the canonical case; Joshua Kodner / Akiba / Lawsons share
+    # the same plugin and the same CDN.  Pick the first non-static
+    # housePhotos URL — variations after the first are just additional
+    # angles of the same lot.
+    image_url = None
+    try:
+        img_el = page.locator('img[src*="image.invaluable.com/housePhotos"]').first
+        if img_el and img_el.count() > 0:
+            image_url = img_el.get_attribute('src')
+    except Exception:
+        pass
+
     return {
         "source": "auction_catalog",
         "via_platform": "auction_catalog",
@@ -351,6 +366,7 @@ def _parse_lot_page(page, url, currency, host_label, host_location):
         "hammer_price": hammer,
         "price_with_premium": None,
         "currency": currency,
+        "image_url": image_url,
         "status": "sold" if hammer else "passed",
         "provenance": "",
         "raw_snapshot": description[:500],

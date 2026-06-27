@@ -451,19 +451,14 @@ def parse_lot_description(desc_text):
                 out["medium"] = clean_text(phrase)
             break
 
-    # Dimensions
-    m_dim = re.search(
-        r"Dim\.?\s*(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm",
-        desc_text, re.IGNORECASE,
-    ) or re.search(
-        r"(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*cm",
-        desc_text, re.IGNORECASE,
-    )
-    if m_dim:
-        out["dimensions"] = (
-            f"{m_dim.group(1).replace(',', '.')} x "
-            f"{m_dim.group(2).replace(',', '.')} cm"
-        )
+    # Dimensions — use the shared smart parser so labelled French
+    # 'H. 25 x L. 36 cm' and 'Diamètre : 28 cm' formats catch
+    # (Osenat lacquer panels and Tran Phuc Duyên-style plates use
+    # these; the prior bespoke regex only handled 'Dim. X x Y cm').
+    from crawlers.parsers.dim import parse_dim_smart
+    w_cm, h_cm, _area, dim_str = parse_dim_smart(desc_text, source="osenat")
+    if dim_str:
+        out["dimensions"] = dim_str
 
     # Year fallback: "vers 1948" anywhere
     if not out["year"]:

@@ -74,6 +74,16 @@ _HEIGHT_WIDE_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# 'Diamètre : 28,7 cm' / 'Diameter: 29 cm' — circular plates / discs.
+# Tran Phuc Duyên lacquer plates (Millon vente3884/3885) are the
+# canonical case.  Stored as W=H=diameter so downstream area / per-m²
+# math treats the round work as its bounding square (closest sensible
+# proxy, matches catalog-house convention).
+_DIAMETER_RE = re.compile(
+    rf'\b(?:diam[èe]tre|diameter|dia\.?|⌀)\s*[:\s]\s*({_FRAC_NUM})\s*cm',
+    re.IGNORECASE,
+)
+
 
 def _to_float(s: str) -> float:
     """Convert '48 1/2' / '60,5' / '100.5' to float.  Raises ValueError."""
@@ -173,6 +183,18 @@ def parse_dim_labelled(text: str) -> tuple:
             if 1 <= w_cm <= 1000 and 1 <= h_cm <= 1000:
                 area = round(w_cm * h_cm / 10000, 4)
                 return (w_cm, h_cm, area, f"{w_cm:g} x {h_cm:g} cm")
+        except ValueError:
+            pass
+
+    # 4) 'Diamètre : 28,7 cm' — circular plate / disc.  W=H=diameter so
+    # the per-m² aggregate treats the round work as its bounding square.
+    m = _DIAMETER_RE.search(text)
+    if m:
+        try:
+            d_cm = round(_to_float(m.group(1)), 2)
+            if 1 <= d_cm <= 1000:
+                area = round(d_cm * d_cm / 10000, 4)
+                return (d_cm, d_cm, area, f"⌀ {d_cm:g} cm")
         except ValueError:
             pass
 
