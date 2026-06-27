@@ -6,12 +6,29 @@ import time
 import requests
 from crawlers.common import parse_amount, parse_date, insert_sale_result, clean_text, log_crawl_run
 
-BASE = "https://www.christies.com.cn"
+# Use the international domain as the canonical source.  Operator
+# audit 2026-06-27: the .cn mirror returned identical lot data (same
+# lot_number, sale_date, hammer, image_phash) for every Christie's HK
+# sale we crawl — 10 of 192 Christie's rows in DB were exact dupes
+# created when the crawler followed a .cn lot href instead of its
+# .com twin.  No lot appears ONLY on the .cn side, so dropping it
+# loses zero coverage.
+BASE = "https://www.christies.com"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+
+
+def _canonicalise_christies_url(u: str) -> str:
+    """Rewrite christies.com.cn URLs to christies.com so the same lot
+    is never inserted twice from the two regional mirrors."""
+    if not u:
+        return u
+    return u.replace("://www.christies.com.cn/", "://www.christies.com/") \
+            .replace("://christies.com.cn/", "://christies.com/")
+
 
 # Known Christie's lot URLs for VN artists (seed set — expand as needed)
 SEED_LOT_URLS = [
-    "https://www.christies.com.cn/en/Lot/lot-6240213",  # Le Pho - Portrait Ngo Manh Duc (sale 15619)
+    "https://www.christies.com/en/Lot/lot-6240213",  # Le Pho - Portrait Ngo Manh Duc (sale 15619)
 ]
 
 # Known Christie's SALE pages (past auctions with price_realised data).
@@ -278,7 +295,10 @@ def extract_lots_from_page(url, verbose=False):
         if not (artist_name and price):
             continue
 
-        source_url = (BASE + url_lot) if url_lot.startswith("/") else (url_lot or f"{BASE}/en/Lot/lot-{lot_id}")
+        source_url = _canonicalise_christies_url(
+            (BASE + url_lot) if url_lot.startswith("/")
+            else (url_lot or f"{BASE}/en/Lot/lot-{lot_id}")
+        )
         # Normalize to canonical form so the same lot crawled from multiple URL patterns
         # (/lot/slug-{id}?params, /en/lot/lot-{id}?breadcrumb, /en/lot/lot-{id}) dedupes on insert.
         m_lid = re.search(r"(?:lot-|-|/)(\d{6,8})(?=[/?]|$)", source_url)
