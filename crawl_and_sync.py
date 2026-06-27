@@ -200,37 +200,58 @@ def sync_to_supabase(conn, source, since_scraped_at):
         if sup and sup not in ('canvas', 'silk', 'paper', 'lacquer', 'panel', 'metal'):
             sup = None
         d['support_type'] = sup
-        # Don't clobber existing image_phash / image_url on Supabase
-        # with NULLs from SQLite.  The dedup detector + admin pages
-        # both depend on these — earlier sync rounds nuked ~200
-        # Bonhams and ~100 Artcurial images that the og:image
-        # backfill had populated, because SQLite hadn't observed
-        # them yet.  Strip the keys when null so PostgREST UPSERT
-        # leaves the existing row value alone.
-        if not d.get('image_url'): d.pop('image_url', None)
-        if not d.get('image_phash'): d.pop('image_phash', None)
-        # CRITICAL — strip hammer-related fields when null so the
-        # sync NEVER overwrites a real Sold price that landed in
-        # Supabase via Pull_Sothebys.command / pull_drouot_hammers
-        # / pull_invaluable_hammers / manual operator patch.
-        # Operator 2026-06-27 caught 147 Sothebys HK lots reverted
-        # from status=sold + hammer set back to estimate_only +
-        # hammer=null because SQLite still had the pre-pull values
-        # and the 09:00 UTC cron sync round merged them on top.
-        # Same class of bug as the earlier image_url null-strip;
-        # extend the rule to every column the hammer pullers touch.
-        for k in (
+        # SUPABASE-AUTHORITATIVE COLUMNS — never overwrite from SQLite.
+        #
+        # PostgREST UPSERT with on_conflict=source_url overwrites every
+        # column we send.  SQLite is the canonical store for crawler-
+        # observed fields (source_url, title, dim from listing card,
+        # etc.) but NOT for fields populated post-sync by Supabase-only
+        # scripts.  When those scripts write a value, the next sync
+        # round sends back the SQLite version (usually NULL or stale)
+        # and silently wipes the improvement.
+        #
+        # Three recurrences of this bug class across 2026-06:
+        #   - 2026-06-27 round 1: 230 Bonhams + 150 Artcurial image_url wiped
+        #   - 2026-06-27 round 2: 147 Sothebys HK hammers wiped
+        #   - 2026-06-27 round 3 (this fix): codebase audit found another 8
+        #     columns at risk from sweep_invaluable_titles, llm_extract_fields,
+        #     fix_dim_orientation, backfill_millon_estimates.
+        #
+        # Rule: if a Supabase-side script writes column X, X must be in
+        # the strip list below.  Use `is None` (not falsy) so legitimate
+        # zero values still pass through.  An empty string is treated
+        # as None — SQLite stores empty for "not observed".
+        _SUPABASE_AUTHORITATIVE = (
+            # Images (backfill_og_images.py, og:image crawler-level fills)
+            'image_url', 'image_phash',
+            # Hammers (Pull_Sothebys, pull_drouot_hammers,
+            # pull_invaluable_hammers, manual operator PATCH)
             'hammer_price', 'price_with_premium',
             'price_usd', 'price_with_premium_usd',
             'price_per_m2_usd', 'currency',
-        ):
-            if d.get(k) in (None, ''):
+            # Orientation + area (fix_dim_orientation.py)
+            'width_cm', 'height_cm', 'area_m2', 'dimensions',
+            # LLM-extracted text fields (llm_extract_fields.py)
+            'medium', 'year', 'provenance', 'artwork_title',
+            'catalog_description',
+            # Estimate backfill (backfill_millon_estimates.py)
+            'estimate_low', 'estimate_high',
+            # Sweep-fixed metadata (sweep_invaluable_titles.py)
+            'auction_title', 'sale_date', 'sale_location',
+            # Operator-set cluster (cluster_resales.py)
+            'artwork_uuid',
+        )
+        for k in _SUPABASE_AUTHORITATIVE:
+            v = d.get(k)
+            if v is None or v == '':
                 d.pop(k, None)
         # Status is the most delicate: 'sold' set by a hammer puller
-        # must beat 'estimate_only' from SQLite.  Only push status
-        # when it's actually 'sold' (or any non-default).  Leave
-        # estimate_only out so PostgREST keeps the Supabase value.
-        if d.get('status') in (None, '', 'estimate_only'):
+        # must beat 'estimate_only' / 'estimate' from SQLite.  Only
+        # push status when it's a confirmed terminal state ('sold',
+        # 'passed', 'withdrawn').  'estimate' (Larasati legacy) and
+        # 'estimate_only' (every other crawler's default) leave the
+        # Supabase value alone.
+        if d.get('status') in (None, '', 'estimate', 'estimate_only', 'unknown'):
             d.pop('status', None)
         payload.append(d)
 

@@ -398,7 +398,13 @@ def parse_catalog(text, sale_meta):
         if not low or not high:
             continue
         currency = est_cur or primary_cur
-        hammer = round((low + high) / 2, 2)  # estimate midpoint (no public hammer)
+        # HARD RULE (operator 2026-06-27, see
+        # feedback_midpoint_hammer_bug memory): NEVER synthesise
+        # hammer from estimate.  Insert with hammer=None +
+        # status='estimate_only' — the row stays in DB for image_phash
+        # / dedup but is hidden from every UI surface that filters on
+        # `status IN (sold, withdrawn) AND price_usd > 0`.
+        hammer = None
         # sale_results.source_url is UNIQUE — anchor per-lot with #lot=NNN so multiple
         # lots from the same catalog don't collide-overwrite each other.
         lot_source_url = f"{source_url}#lot={parsed['lot_number']}"
@@ -421,7 +427,7 @@ def parse_catalog(text, sale_meta):
             "hammer_price": hammer,
             "price_with_premium": None,
             "currency": currency,
-            "status": "estimate",          # midpoint, not real hammer
+            "status": "estimate_only",     # no real hammer; UI hides it
             "provenance": "",
             "raw_snapshot": (
                 f"{parsed['artist_name_raw']} ({nat}) | {parsed['title'][:120]}"
