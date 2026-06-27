@@ -108,6 +108,21 @@ def _mark_invaluable_unsold(row_id: int) -> bool:
     return r.status_code < 300
 
 
+def patch_image_only(row_id: int, image_url: str) -> bool:
+    """Set image_url on a row that already has hammer / is unsold.
+    Skipped when the row already has an image_url."""
+    rr = requests.get(f"{URL}/rest/v1/sale_results",
+                      params={"id": f"eq.{row_id}", "select": "image_url"},
+                      headers=H, timeout=10)
+    if rr.ok and rr.json() and rr.json()[0].get("image_url"):
+        return False
+    pr = requests.patch(f"{URL}/rest/v1/sale_results",
+                       params={"id": f"eq.{row_id}"},
+                       headers={**H, "Prefer": "return=minimal"},
+                       json={"image_url": image_url}, timeout=10)
+    return pr.status_code < 300
+
+
 def patch_hammer(row_id: int, hammer: float, currency: str, fx: dict,
                  image_url: str | None = None) -> bool:
     fx_to_usd = fx.get(currency.upper(), 1.0)
@@ -409,11 +424,13 @@ def _sothebys_direct_request(lot_url, bearer, probe=False, source_label="sotheby
         print(f"      ◆ graphql JSON written to {sample}")
 
     amt, cur = _parse_sothebys_graphql_response(data)
-    if amt is not None:
-        # Image comes free with the same call — set it as side-effect
-        # via a module-level stash since the return type stays 2-tuple
-        # for callers that don't care.
-        _SOTHEBYS_LAST_IMAGE[0] = _extract_sothebys_image(data)
+    # Image comes free with the same call — stash it whether or not the
+    # lot has a hammer.  Operator 2026-06-27: unsold lots
+    # (bidState.sold.isSold=false, no finalPriceV2) still ship a media
+    # block with renditions; previously the image was being dropped
+    # because we only stashed it when amt != None, so passed/unsold
+    # Sothebys rows never got their photo.
+    _SOTHEBYS_LAST_IMAGE[0] = _extract_sothebys_image(data)
     return amt, cur
 
 
@@ -750,10 +767,17 @@ def _process_sothebys_direct(rows: list[dict], probe: bool) -> None:
         print(f"      URL: {url[-80:]}")
         _SOTHEBYS_LAST_IMAGE[0] = None  # reset per-lot stash
         amt, cur = _sothebys_direct_request(url, bearer, probe=probe, source_label="sothebys")
+        img = _SOTHEBYS_LAST_IMAGE[0]
         if amt is None:
+            # No hammer (lot unsold / passed / not yet closed) — but the
+            # GraphQL response still carries the lot photo.  Patch the
+            # image alone so the row at least gets its thumbnail.
+            if img and patch_image_only(row["id"], img):
+                print(f"      ⚠ no hammer (unsold) — image saved")
+            else:
+                print(f"      ✗ no hammer, no image")
             n_fail += 1
         else:
-            img = _SOTHEBYS_LAST_IMAGE[0]
             img_note = f" + image" if img else ""
             print(f"      ✓ hammer = {cur} {amt:,.0f}{img_note}")
             if patch_hammer(row["id"], amt, cur, FX, image_url=img):
