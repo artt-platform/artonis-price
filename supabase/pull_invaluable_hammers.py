@@ -117,13 +117,23 @@ def main():
                 no_sold += 1
                 continue
             m_sold = _SOLD_AMOUNT_RE.search(r.text)
-            if not m_sold:
+            if not m_sold or float(m_sold.group(1)) <= 0:
+                # Lot closed but no soldAmount — confirmed UNSOLD.  Mark
+                # passed so the data-quality 'cần catch' counter stops
+                # listing it as a retry candidate.  Operator 2026-06-27:
+                # 3 Everard lots sat at estimate_only forever because
+                # the puller treated 'closed + unsold' the same as
+                # 'still open', wasting cron budget on them every night.
+                requests.patch(
+                    f"{SU}/rest/v1/sale_results",
+                    params={"id": f"eq.{row['id']}"},
+                    headers=H_PATCH,
+                    json={"status": "passed"},
+                    timeout=10,
+                )
                 no_sold += 1
                 continue
             sold_val = float(m_sold.group(1))
-            if sold_val <= 0:
-                no_sold += 1
-                continue
             currency = row.get("currency") or "USD"
             m_cur = _CURRENCY_RE.search(r.text)
             if m_cur:
