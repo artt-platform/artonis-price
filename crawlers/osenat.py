@@ -339,12 +339,24 @@ def fetch_lot_detail(scraper, lot_url, lot_id):
                 if cur:
                     currency = cur
 
+    # Image — Osenat (like G&D / Nouvel) embeds lot photos on Drouot's
+    # CDN: cdn.drouot.com/d/image/lot?size=phare&path=<house>/<auction>/<hash>
+    # Pick the first inline <img> that points there.
+    image_url = None
+    m_img = re.search(
+        r'<img[^>]+(?:src|data-src)="(https?://cdn\.drouot\.com/d/image/lot[^"]+)"',
+        html,
+    )
+    if m_img:
+        image_url = m_img.group(1).replace("&amp;", "&")
+
     return {
         "description": desc,
         "estimate_low": est_low,
         "estimate_high": est_high,
         "currency": currency,
         "est_text": est_text,
+        "image_url": image_url,
     }
 
 
@@ -632,6 +644,7 @@ def crawl(conn, sale_specs=None, years=None, delay=1.2, verbose=True, filter_vn=
                     # Older lots in DB inherited page-body noise; this
                     # writes the clean version going forward.
                     "catalog_description": detail["description"][:2000],
+                    "image_url": detail.get("image_url"),
                     "raw_snapshot": detail["description"][:500],
                 }
                 insert_sale_result(conn, rec)

@@ -134,6 +134,12 @@ jobs:
         run: |
           python3 supabase/backfill_invaluable_images.py
 
+      - name: Pull Invaluable hammers (past estimate_only → sold)
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 supabase/pull_invaluable_hammers.py
+
       - name: Summary
         if: always()
         run: |
