@@ -209,6 +209,29 @@ def sync_to_supabase(conn, source, since_scraped_at):
         # leaves the existing row value alone.
         if not d.get('image_url'): d.pop('image_url', None)
         if not d.get('image_phash'): d.pop('image_phash', None)
+        # CRITICAL — strip hammer-related fields when null so the
+        # sync NEVER overwrites a real Sold price that landed in
+        # Supabase via Pull_Sothebys.command / pull_drouot_hammers
+        # / pull_invaluable_hammers / manual operator patch.
+        # Operator 2026-06-27 caught 147 Sothebys HK lots reverted
+        # from status=sold + hammer set back to estimate_only +
+        # hammer=null because SQLite still had the pre-pull values
+        # and the 09:00 UTC cron sync round merged them on top.
+        # Same class of bug as the earlier image_url null-strip;
+        # extend the rule to every column the hammer pullers touch.
+        for k in (
+            'hammer_price', 'price_with_premium',
+            'price_usd', 'price_with_premium_usd',
+            'price_per_m2_usd', 'currency',
+        ):
+            if d.get(k) in (None, ''):
+                d.pop(k, None)
+        # Status is the most delicate: 'sold' set by a hammer puller
+        # must beat 'estimate_only' from SQLite.  Only push status
+        # when it's actually 'sold' (or any non-default).  Leave
+        # estimate_only out so PostgREST keeps the Supabase value.
+        if d.get('status') in (None, '', 'estimate_only'):
+            d.pop('status', None)
         payload.append(d)
 
     # Batch insert
