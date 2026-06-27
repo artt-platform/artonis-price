@@ -122,6 +122,12 @@ jobs:
         run: |
           python3 supabase/fix_dim_orientation.py
 
+      - name: Pull Drouot hammers (past estimate_only → sold)
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 supabase/pull_drouot_hammers.py
+
       - name: Summary
         if: always()
         run: |
