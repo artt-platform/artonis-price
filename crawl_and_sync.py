@@ -213,20 +213,33 @@ def sync_to_supabase(conn, source, since_scraped_at):
         push_safe_status(d)
         payload.append(d)
 
-    # Batch insert
+    # Group rows by their key signature so each PostgREST batch has
+    # uniform columns.  Operator 2026-06-28: strip_authoritative drops
+    # different keys per row depending on which Supabase-authoritative
+    # fields the SQLite row has NULL for.  Sending a mixed-key batch
+    # produces PGRST102 'All object keys must match' and the whole
+    # crawl-and-sync silently pushed 0/557 rows for the Millon
+    # re-crawl.  Group → batch each group separately.
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for row in payload:
+        sig = tuple(sorted(row.keys()))
+        groups[sig].append(row)
+
     BATCH = 100
     total_pushed = 0
-    for i in range(0, len(payload), BATCH):
-        chunk = payload[i:i + BATCH]
-        # Use on_conflict=source_url for upsert
-        r = requests.post(
-            f"{URL}/rest/v1/sale_results?on_conflict=source_url",
-            headers=H, json=chunk, timeout=60,
-        )
-        if r.status_code in (201, 204, 200):
-            total_pushed += len(chunk)
-        else:
-            print(f"  ✗ batch {i}: HTTP {r.status_code} {r.text[:300]}")
+    for sig, group_rows in groups.items():
+        for i in range(0, len(group_rows), BATCH):
+            chunk = group_rows[i:i + BATCH]
+            r = requests.post(
+                f"{URL}/rest/v1/sale_results?on_conflict=source_url",
+                headers=H, json=chunk, timeout=60,
+            )
+            if r.status_code in (201, 204, 200):
+                total_pushed += len(chunk)
+            else:
+                print(f"  ✗ batch ({len(sig)} keys, {len(chunk)} rows): "
+                      f"HTTP {r.status_code} {r.text[:200]}")
     return len(rows), total_pushed
 
 
