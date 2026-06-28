@@ -152,6 +152,12 @@ jobs:
         run: |
           python3 supabase/pull_invaluable_hammers.py
 
+      - name: Backfill image pHash (for dedup)
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 supabase/backfill_image_phash.py
+
       - name: Summary
         if: always()
         run: |
