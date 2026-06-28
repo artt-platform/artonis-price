@@ -1,0 +1,346 @@
+"""Insert past Invaluable lots from a list of lot-detail URLs.
+
+This replaces the ad-hoc inline scripts the operator was running
+during URL paste sessions ("here are 20 Invaluable URLs for Lê
+Phổ — import them").
+
+The earlier ad-hoc code only saved the page meta `<title>` text
+into `raw_snapshot` and left `catalog_description` NULL.  When
+that title was just the artist name ("Le Thiet Cuong (b.1962)")
+the LLM extractor had no signal and `medium` / `provenance` /
+`year` stayed NULL — operator caught lot 19411 (Nguyễn Tư Nghiêm
+'lacquer on panel', provenance line) and lot 558 (Vu Cao Dam Le
+Salut, URL-slug leak into title) as fallout.
+
+This script:
+  1. Fetches the lot detail page via cloudscraper (the public
+     access path Invaluable forgot to lock — see
+     pull_invaluable_hammers.py for the same trick).
+  2. Reads the JSON data island for the structured fields
+     (lotName, soldAmount, isLotClosed, estimate range, image,
+     etc.) AND
+  3. Captures the richest description text it can find — JSON-LD
+     `description`, the OpenGraph description, and the first
+     prose-paragraph node — and concatenates them into one blob.
+  4. Stores that blob in `catalog_description` (NOT just
+     `raw_snapshot`) so the next `llm_extract_fields.py` run can
+     extract medium / provenance / year.
+  5. Inserts via UPSERT on source_url (idempotent — re-running
+     the same URLs is a no-op).
+  6. Skips lots whose page Invaluable returns 4xx / 5xx — those
+     get logged and the operator can retry later after the CF
+     cooldown.
+
+Usage:
+  python3 supabase/import_invaluable_urls.py URL [URL ...]
+  python3 supabase/import_invaluable_urls.py < urls.txt
+  echo URL1\\nURL2 | python3 supabase/import_invaluable_urls.py
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+import requests
+
+try:
+    import cloudscraper
+except ImportError:
+    print("install: pip install cloudscraper beautifulsoup4")
+    sys.exit(1)
+
+from bs4 import BeautifulSoup
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from crawlers.common import (
+    classify_kind,
+    detect_support_type,
+    to_usd,
+)
+from crawlers.parsers import extract_medium, parse_dim
+from supabase.sync_protect import strip_authoritative, push_safe_status
+
+
+def _load_env():
+    p = ROOT / ".env.local"
+    if not p.exists():
+        return
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if line and "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k, v)
+
+
+_load_env()
+SU = os.environ["SUPABASE_URL"]
+SK = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SB_R = {"apikey": SK, "Authorization": f"Bearer {SK}"}
+SB_W = {**SB_R, "Content-Type": "application/json"}
+
+PREMIUM_RATE = 1.25  # Invaluable houses average ~25%; some go higher.
+
+# Patterns used to dig fields out of the Invaluable JSON data island.
+# Invaluable inlines a large JSON blob alongside the page markup; the
+# fields below come from that blob.  Tested 2026-06-28.
+PAT_LOT_NAME = re.compile(r'"lotName"\s*:\s*"([^"]+)"')
+PAT_LOT_TITLE = re.compile(r'"lotTitle"\s*:\s*"([^"]+)"')
+PAT_SOLD = re.compile(r'"soldAmount"\s*:\s*(\d+(?:\.\d+)?)')
+PAT_CLOSED = re.compile(r'"isLotClosed"\s*:\s*(true|false)')
+PAT_EST_LOW = re.compile(r'"lowEstimate"\s*:\s*(\d+(?:\.\d+)?)')
+PAT_EST_HIGH = re.compile(r'"highEstimate"\s*:\s*(\d+(?:\.\d+)?)')
+PAT_CURRENCY = re.compile(r'"currencyCode"\s*:\s*"([A-Z]{3})"')
+PAT_AUCTION_HOUSE = re.compile(r'"houseName"\s*:\s*"([^"]+)"')
+PAT_AUCTION_LOCATION = re.compile(r'"location"\s*:\s*"([^"]+)"')
+PAT_SALE_DATE = re.compile(r'"saleDate"\s*:\s*"(\d{4}-\d{2}-\d{2})')
+PAT_IMAGE_URL = re.compile(
+    r'"(?:imageUrl|photoUrl)"\s*:\s*"(https?://[^"]+\.(?:jpg|jpeg|png))"',
+    re.IGNORECASE,
+)
+PAT_LD_DESCRIPTION = re.compile(
+    r'"@type"\s*:\s*"Product"[^{}]{0,500}"description"\s*:\s*"([^"]+)"',
+    re.DOTALL,
+)
+
+
+def fetch_lot_page(sc, url: str) -> tuple[str | None, int]:
+    """Return (html, status_code).  None on transport error."""
+    try:
+        r = sc.get(url, timeout=20)
+        return r.text, r.status_code
+    except Exception as e:  # noqa: BLE001 — log + continue
+        print(f"    ✗ fetch error: {type(e).__name__}: {e}")
+        return None, 0
+
+
+def extract_fields(html: str, url: str) -> dict | None:
+    """Pull every structured field we can out of the Invaluable lot
+    page.  Returns a dict ready to UPSERT, or None when the page
+    looks too thin (no title + no description) to be a valid lot."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Title: prefer JSON lotName, fall back to lotTitle, then <title>.
+    lot_name = (PAT_LOT_NAME.search(html) or [None, None])[1]
+    lot_title = (PAT_LOT_TITLE.search(html) or [None, None])[1]
+    page_title = (soup.title.get_text(strip=True) if soup.title else "")
+    title = (lot_name or lot_title or page_title or "").strip()
+    # Invaluable embeds escape sequences (é etc.); JSON-decode the
+    # extracted strings so 'lê' renders correctly downstream.
+    if title:
+        try:
+            title = json.loads(f'"{title}"')
+        except json.JSONDecodeError:
+            pass
+    if not title:
+        return None
+
+    # Description: combine ALL text signals into one blob so the
+    # downstream LLM extractor (llm_extract_fields.py) has the
+    # widest possible context.  Order: JSON-LD description, OG
+    # description, meta description, then the lot-detail panel's
+    # first prose paragraph if present.
+    desc_parts = []
+    m_ld = PAT_LD_DESCRIPTION.search(html)
+    if m_ld:
+        try:
+            desc_parts.append(json.loads(f'"{m_ld.group(1)}"'))
+        except json.JSONDecodeError:
+            desc_parts.append(m_ld.group(1))
+    for sel in [
+        'meta[property="og:description"]',
+        'meta[name="description"]',
+    ]:
+        el = soup.select_one(sel)
+        if el and el.get("content"):
+            desc_parts.append(el["content"].strip())
+    # First long-prose paragraph: Invaluable's lot-detail page
+    # usually renders the catalog description as a <p> or <div>
+    # somewhere below the bid panel.  Generic body scan: longest
+    # paragraph with at least 50 chars that isn't a navigation /
+    # footer block (filtered by parent class hints).
+    long_p = ""
+    for p in soup.find_all(["p", "div"]):
+        cls = " ".join(p.get("class", [])).lower()
+        if any(skip in cls for skip in ("nav", "footer", "header", "menu", "sidebar")):
+            continue
+        text = p.get_text(" ", strip=True)
+        if 50 <= len(text) <= 2000 and len(text) > len(long_p):
+            long_p = text
+    if long_p:
+        desc_parts.append(long_p)
+
+    # De-dupe while preserving order: the meta + JSON-LD often
+    # repeat the same string verbatim.
+    seen = set()
+    desc_unique = []
+    for d in desc_parts:
+        d = (d or "").strip()
+        if d and d not in seen:
+            seen.add(d)
+            desc_unique.append(d)
+    catalog_description = " | ".join(desc_unique)[:4000]
+
+    # Numeric / status fields from the JSON island.
+    sold = PAT_SOLD.search(html)
+    closed = PAT_CLOSED.search(html)
+    is_closed = bool(closed and closed.group(1) == "true")
+    sold_amount = float(sold.group(1)) if sold else 0.0
+
+    est_low = PAT_EST_LOW.search(html)
+    est_high = PAT_EST_HIGH.search(html)
+    currency = (PAT_CURRENCY.search(html) or [None, "USD"])[1]
+    image_url = (PAT_IMAGE_URL.search(html) or [None, None])[1]
+    house = (PAT_AUCTION_HOUSE.search(html) or [None, ""])[1]
+    location = (PAT_AUCTION_LOCATION.search(html) or [None, ""])[1]
+    sale_date = (PAT_SALE_DATE.search(html) or [None, ""])[1]
+
+    # Status / hammer.  Same logic as pull_invaluable_hammers.py
+    # except em insert side: closed-with-sold → sold; closed-no-sold
+    # → passed; not-closed → estimate_only.
+    if is_closed and sold_amount > 0:
+        status = "sold"
+        hammer = sold_amount
+    elif is_closed:
+        status = "passed"
+        hammer = None
+    else:
+        status = "estimate_only"
+        hammer = None
+
+    # Width / height — parse from the catalog description first
+    # (richer text, more likely to include a 'X x Y cm' pair) and
+    # fall back to the title.  parse_dim returns
+    # (W, H, area_m2, display_str) — Invaluable convention is
+    # W × H so don't pass a source key.
+    width_cm, height_cm, _area_m2, dim_str = parse_dim(
+        catalog_description or title, source=""
+    )
+
+    # Medium / support_type via the existing parser stack.  When the
+    # description has 'oil on canvas' / 'lacquer on panel' / etc.,
+    # this fills both fields — no LLM call needed.  When it
+    # doesn't, leave NULL and let llm_extract_fields.py handle it
+    # on the next cron tick.
+    medium = extract_medium(catalog_description) or extract_medium(title) or ""
+    support_type = detect_support_type(medium, title) if medium else None
+    kind = classify_kind(medium, title, catalog_description, dim_str)
+
+    # USD conversion.
+    price_usd, _ = to_usd(hammer, currency) if hammer else (None, None)
+    premium = round(hammer * PREMIUM_RATE, 2) if hammer else None
+    premium_usd, _ = to_usd(premium, currency) if premium else (None, None)
+
+    return {
+        "source": "invaluable",
+        "source_url": url,
+        "artwork_title": title[:300],
+        "catalog_description": catalog_description or None,
+        # raw_snapshot kept for legacy consumers (and as a backup
+        # when catalog_description gets re-derived later).
+        "raw_snapshot": (catalog_description or title)[:500],
+        "medium": medium or None,
+        "support_type": support_type,
+        "kind": kind,
+        "width_cm": width_cm,
+        "height_cm": height_cm,
+        "dimensions": dim_str or None,
+        "estimate_low": float(est_low.group(1)) if est_low else None,
+        "estimate_high": float(est_high.group(1)) if est_high else None,
+        "currency": currency,
+        "hammer_price": hammer,
+        "price_usd": round(price_usd, 2) if price_usd else None,
+        "price_with_premium": premium,
+        "price_with_premium_usd": round(premium_usd, 2) if premium_usd else None,
+        "status": status,
+        "auction_title": house or None,
+        "sale_location": location or None,
+        "sale_date": sale_date or None,
+        "image_url": image_url,
+        "scraped_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def upsert(rec: dict) -> tuple[bool, str]:
+    """UPSERT on source_url.  Returns (success, info).
+
+    Routes through strip_authoritative + push_safe_status so this
+    script's UPSERTs follow the same protection rules as the cron
+    sync — re-importing an old URL whose hammer was already filled
+    in by pull_invaluable_hammers.py must NOT overwrite that hammer
+    with NULL just because Invaluable's lot-detail JSON dropped the
+    soldAmount field over time.  Operator 2026-06-28 caught lot
+    31095 going from sold (real hammer) back to estimate_only
+    (hammer=NULL) on the first test run because of exactly this.
+    """
+    strip_authoritative(rec)
+    push_safe_status(rec)
+    r = requests.post(
+        f"{SU}/rest/v1/sale_results?on_conflict=source_url",
+        headers={**SB_W, "Prefer": "resolution=merge-duplicates"},
+        json=rec, timeout=20,
+    )
+    return r.status_code in (200, 201, 204), \
+        (r.text[:200] if r.status_code >= 300 else "ok")
+
+
+def main():
+    if len(sys.argv) > 1:
+        urls = [u for u in sys.argv[1:] if u.startswith("http")]
+    else:
+        urls = [
+            line.strip() for line in sys.stdin
+            if line.strip().startswith("http")
+        ]
+    if not urls:
+        print("no URLs.  pass on argv or via stdin.")
+        sys.exit(1)
+
+    sc = cloudscraper.create_scraper()
+    inserted = err = skipped = 0
+    for i, url in enumerate(urls, 1):
+        print(f"[{i}/{len(urls)}] {url}")
+        html, code = fetch_lot_page(sc, url)
+        if not html or code != 200:
+            err += 1
+            print(f"    ✗ HTTP {code}")
+            continue
+        rec = extract_fields(html, url)
+        if not rec:
+            skipped += 1
+            print("    ✗ no usable title")
+            continue
+        # Capture status for logging BEFORE upsert() runs
+        # push_safe_status, which pops the key when it's provisional
+        # (estimate_only/unknown) to avoid stomping a Supabase-side
+        # sold row.
+        log_status = rec.get("status", "?")
+        ok, info = upsert(rec)
+        if ok:
+            inserted += 1
+            tag = (
+                "SOLD" if log_status == "sold"
+                else "PASSED" if log_status == "passed"
+                else "estimate_only"
+            )
+            print(
+                f"    ✓ {tag} | {rec['artwork_title'][:60]!s:60} "
+                f"| medium={rec.get('medium') or '-'} kind={rec.get('kind', '?')}"
+            )
+        else:
+            err += 1
+            print(f"    ✗ upsert: {info}")
+        # Light pacing — Invaluable's CF starts blocking after
+        # ~50 requests per session.
+        time.sleep(0.4)
+
+    print(f"\nDone.  inserted/updated={inserted}  errors={err}  skipped={skipped}")
+
+
+if __name__ == "__main__":
+    main()
