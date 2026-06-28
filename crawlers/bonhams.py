@@ -216,6 +216,25 @@ def parse_lot(doc):
         after = slug[m_suf.end():].lstrip("-") if m_suf else ""
         if after:
             after = re.sub(r"-(?:19|20)\d{2}$", "", after)  # trailing creation year
+            # Strip trailing dimension blocks that leak into URL slugs:
+            #   '...le-salut-1964-18-18-x-21-78in-46-x-555cm' →
+            #   '...le-salut-1964' before further cleanup.  Operator
+            #   2026-06-28 caught lot 558 'Le Salut 1964 18 18 X 21
+            #   78in 46 X 555cm' — slug contained both inch and cm
+            #   dim pairs.  Catch each variant up to two consecutive
+            #   times (some slugs include both inch and cm copies).
+            for _ in range(2):
+                # 'NN-NN-x-NN-NNin' or 'NN-x-NNin' (inch form, may include fractions like '78in')
+                after = re.sub(
+                    r"-\d+(?:-\d+)?-x-\d+(?:-\d+)?in(?:$|-)", "-", after
+                )
+                # 'NN-NN-x-NN-NNcm' or 'NN-x-NNcm' (cm form)
+                after = re.sub(
+                    r"-\d+(?:-\d+)?-x-\d+(?:-\d+)?cm(?:$|-)", "-", after
+                )
+                # Trailing 'NN-x-NN' (no unit suffix — rare but caught)
+                after = re.sub(r"-\d+-x-\d+$", "", after)
+            after = after.rstrip("-")
             words = after.replace("-", " ").split()
             small = {"a","an","and","of","the","in","on","with","to","at","for","du","de","la","le","et"}
             artwork_title = " ".join(
