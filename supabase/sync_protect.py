@@ -112,3 +112,74 @@ def push_safe_status(row: dict) -> dict:
     if row.get("status") in _PROVISIONAL_STATUSES or row.get("status") is None:
         row.pop("status", None)
     return row
+
+
+# Seconds.  When a Supabase row's `updated_at` exceeds its
+# `scraped_at` by more than this margin, treat it as a manual
+# operator edit and skip the whole sync write onto it.  60 s is
+# enough slack to absorb the drift between when crawl_and_sync
+# stamps scraped_at on the row dict and PostgREST stamps updated_at.
+MANUAL_EDIT_GAP_SECONDS: int = 60
+
+
+def is_manually_edited(sup_row: dict, threshold: int = MANUAL_EDIT_GAP_SECONDS) -> bool:
+    """Detect 'this row was operator-PATCHed after its last crawl'.
+
+    Normal sync UPSERTs write both scraped_at and updated_at to the
+    same timestamp.  A direct PATCH (manual fix, fix_dim_
+    orientation.py, llm_extract_fields.py, hammer puller, …) bumps
+    updated_at via the trigger but leaves scraped_at alone, so the
+    gap grows past `threshold` seconds.
+
+    Operator-flagged 2026-06-28: every Supabase-side fix em ships
+    is at risk of the next cron re-scrape over-writing it because
+    strip_authoritative only blocks NULL/empty SQLite values, not
+    non-null stale ones.  Title cleanups (43 lots), Sothebys status
+    (141 lots), dim orientation (620 lots), the lot 19238/19221
+    status+hammer fixes — all needed this gap-based protection.
+
+    `sup_row` must include both timestamps.  Missing fields → False
+    (default to syncing, never block).
+    """
+    su = sup_row.get("updated_at")
+    sc = sup_row.get("scraped_at")
+    if not su or not sc:
+        return False
+    from datetime import datetime
+    try:
+        d_up = datetime.fromisoformat(su.rstrip("Z"))
+        d_sc = datetime.fromisoformat(sc.rstrip("Z"))
+    except (ValueError, AttributeError):
+        return False
+    return (d_up - d_sc).total_seconds() > threshold
+
+
+def fetch_supabase_state(supabase_url: str, service_key: str,
+                         source_urls: list) -> dict:
+    """Batch-pull `source_url, updated_at, scraped_at` for the given
+    URLs in groups of 100.  Returns a dict keyed by source_url.
+
+    Used by sync writers to identify which target rows have been
+    manually edited so they can skip the UPSERT entirely instead
+    of merging stale SQLite over the operator's fix.
+    """
+    import requests
+    headers = {"apikey": service_key,
+               "Authorization": f"Bearer {service_key}"}
+    out: dict[str, dict] = {}
+    BATCH = 100
+    for i in range(0, len(source_urls), BATCH):
+        chunk = source_urls[i:i + BATCH]
+        in_list = ",".join(f'"{u}"' for u in chunk)
+        r = requests.get(
+            f"{supabase_url}/rest/v1/sale_results",
+            params={
+                "source_url": f"in.({in_list})",
+                "select": "source_url,updated_at,scraped_at",
+            },
+            headers=headers, timeout=30,
+        )
+        if r.status_code == 200:
+            for row in r.json():
+                out[row["source_url"]] = row
+    return out

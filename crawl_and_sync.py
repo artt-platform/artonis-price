@@ -213,6 +213,33 @@ def sync_to_supabase(conn, source, since_scraped_at):
         push_safe_status(d)
         payload.append(d)
 
+    # Manual-edit gap protection (added 2026-06-28).  For every URL
+    # we're about to push, check Supabase's updated_at vs scraped_at.
+    # If the row has been operator-PATCHed since the last sync (gap
+    # > MANUAL_EDIT_GAP_SECONDS), skip it ENTIRELY — strip_authoritative
+    # only blocks NULL/empty SQLite values from overwriting Supabase
+    # and doesn't catch the case where SQLite has a non-null stale
+    # value that conflicts with an em-applied fix.  Operator-flagged
+    # after a string of manual fixes (Sothebys status, dim
+    # orientation, title cleanups, lot 19238/19221 hammer+status)
+    # were at risk of being silently re-written by the next nightly
+    # crawl-and-sync round.
+    from supabase.sync_protect import (
+        fetch_supabase_state, is_manually_edited,
+    )
+    source_urls = [row.get("source_url") for row in payload
+                   if row.get("source_url")]
+    sup_state = fetch_supabase_state(URL, KEY, source_urls)
+    skipped_manual = 0
+    payload = [
+        row for row in payload
+        if not is_manually_edited(sup_state.get(row.get("source_url", ""), {}))
+    ]
+    skipped_manual = len(source_urls) - len(payload)
+    if skipped_manual:
+        print(f"  ↻ skipped {skipped_manual} manually-edited rows "
+              "(updated_at > scraped_at + gap)")
+
     # Group rows by their key signature so each PostgREST batch has
     # uniform columns.  Operator 2026-06-28: strip_authoritative drops
     # different keys per row depending on which Supabase-authoritative
