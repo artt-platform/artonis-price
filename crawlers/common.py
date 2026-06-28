@@ -360,6 +360,49 @@ _EXPLICIT_SCULPTURE_KWS = ("sculpture", "sculpté", "carved", "statuette", "bust
                            # (Bonhams Lebadang lot 31782/4 'Personnage').
                            "socle", "pedestal", "without the base", "with base")
 
+# Bust/portrait-form titles: when combined with small dimensions
+# (~< 25 cm any side) and no explicit 2D medium, this is almost
+# always a bust/sculpture, not a tiny painting.
+#
+# Operator 2026-06-28: Vu Cao Dam 'Portrait du fils d'un ami'
+# (Christies HK lot 11267 / Phillips lot 3828, both 15-16 cm) were
+# classified painting because medium was unknown and 'Portrait'
+# alone is too generic.  Small + portrait-form + no 2D medium is
+# the right disambiguator.
+_SMALL_PORTRAIT_KWS = (
+    "portrait", "buste", "bust", "tête", "tete", "head", "figurine",
+    "personnage",
+)
+_EXPLICIT_2D_MEDIUM_KWS = (
+    "oil", "huile", "watercolor", "watercolour", "aquarelle", "gouache",
+    "encre", "ink", "tempera", "acrylic", "acrylique",
+    "silk", "soie", "lụa", "canvas", "toile", "vải",
+    "paper", "papier", "giấy", "carton", "cardboard", "bìa cứng",
+    "panel painting", "lacquer on", "sơn mài", "son mai",
+    "pastel", "fusain", "crayon", "charcoal",
+    "mixed media on paper", "mixed media on canvas",
+)
+
+
+def _smallest_dim_cm(dimensions_str):
+    """Parse 'W x H cm' / 'W x H x D cm' → smallest side in cm, or None.
+    Used by the small-portrait sculpture heuristic.  Returns None when
+    the string can't be parsed as numeric dims (skip the heuristic
+    rather than crash)."""
+    if not dimensions_str:
+        return None
+    import re as _re
+    nums = _re.findall(r"(\d+(?:[.,]\d+)?)", str(dimensions_str))
+    if len(nums) < 2:
+        return None
+    try:
+        vals = [float(n.replace(",", ".")) for n in nums[:3]]
+    except (ValueError, TypeError):
+        return None
+    if not vals:
+        return None
+    return min(vals)
+
 
 def classify_kind(medium, title="", description=None, dimensions=None):
     """Classify a sale_result as one of:
@@ -436,6 +479,24 @@ def classify_kind(medium, title="", description=None, dimensions=None):
     if "trừu tượng" not in t and "tru tuong" not in t:
         for kw in _TITLE_SCULPTURE_KWS:
             if kw in t:
+                return "sculpture"
+    # Small-portrait disambiguator (added 2026-06-28).  When the
+    # title carries a bust/portrait/head form word AND the smallest
+    # dimension is < 25 cm AND there's NO explicit 2D-medium
+    # keyword (oil/watercolor/canvas/paper/silk/lacquer/…), treat
+    # as sculpture.  This catches busts and figurines that the
+    # bronze/marble material rules above miss when the catalog
+    # never names the material — Vu Cao Dam 'Portrait du fils
+    # d'un ami' (Christies HK 15.5 × 16.5 cm, Phillips 16 × 15.2
+    # cm) was the trigger.  Skip when ANY 2D medium keyword
+    # appears — Mai Trung Thu's silk 'Portraits' at 30+ cm should
+    # stay painting.
+    if any(kw in t for kw in _SMALL_PORTRAIT_KWS):
+        has_2d = any(kw in m for kw in _EXPLICIT_2D_MEDIUM_KWS) \
+              or any(kw in d for kw in _EXPLICIT_2D_MEDIUM_KWS)
+        if not has_2d:
+            sm = _smallest_dim_cm(dimensions or "")
+            if sm is not None and sm < 25:
                 return "sculpture"
     return "painting"
 
