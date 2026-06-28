@@ -109,6 +109,91 @@ PAT_LD_DESCRIPTION = re.compile(
 )
 
 
+def _clean_invaluable_title(title: str) -> str:
+    """Strip Invaluable's metadata-bloated prefix and 'Untitled - X'
+    wrapper from a lotName.  Two passes:
+
+      1. Strip the artist + nationality + year prefix.  Many
+         Invaluable lotNames lead with the artist's surname,
+         nationality, and (birth) year before the actual artwork
+         title — e.g. 'HUNG, VIETNAMESE 1957, UNTITLED - STANDING
+         WOMAN' (lot 19624) where everything before 'UNTITLED' is
+         metadata that belongs in artist_name_raw, not artwork_title.
+         The prefix ends at the LAST comma that comes after either
+         a year or a nationality token.
+
+      2. Unwrap 'Untitled - X' / 'Untitled, X' / 'Untitled (X)' —
+         when Invaluable's catalog records 'Untitled' as the
+         primary title but parenthetically (or after a dash) gives
+         the descriptive name the artist or estate uses, surface
+         the descriptive name as the title.
+
+    Output is title-cased so 'STANDING WOMAN' → 'Standing Woman'
+    unless the input was already mixed-case (then preserve the
+    user-facing capitalisation).
+    """
+    s = title.strip()
+    # Pass 1 — prefix strip.  Find the END of the
+    # 'NATIONALITY (year/years)' run and discard everything up to
+    # and including the comma that follows it.
+    m = re.search(
+        r"(?i)\b(?:vietnamese|french|american|chinese|british|"
+        r"frenchamerican|french[- ]american|french[- ]vietnamese)"
+        r"(?:[\s,]+(?:born\s+)?\d{4}(?:\s*[-–—]\s*\d{4})?)?"
+        r"\s*,\s*",
+        s,
+    )
+    if m:
+        s = s[m.end():].strip()
+    else:
+        # No nationality marker — try birth-death year pair, either
+        # parenthesised ('Le Pho (1907-2001) Composition') or bare
+        # ('Vu Cao Dam 1908-2000 The Black Horse Oil Painting').
+        m2 = re.search(r"\(?\d{4}\s*[-–—]\s*\d{4}\)?\s*", s)
+        if m2:
+            s = s[m2.end():].strip()
+    # Pass 1b — strip trailing medium / technique noise that some
+    # houses append: 'The Black Horse Oil Painting' → 'The Black
+    # Horse'.  Catches '... Oil Painting', '... Lacquer Painting',
+    # '... Watercolour on Paper', '... Oil on Canvas'.
+    s = re.sub(
+        r"(?i)\s+(?:oil|watercolor|watercolour|gouache|ink|acrylic|"
+        r"lacquer|tempera|pastel|mixed media|mixed medium)"
+        r"(?:\s+(?:on|painting|drawing|sketch))?"
+        r"(?:\s+(?:canvas|paper|panel|board|silk|wood|cardboard))?\s*$",
+        "", s,
+    ).strip(" ,-–—")
+    # Pass 2 — unwrap Untitled markers.
+    m_u = re.match(
+        r"(?i)^untitled\s*(?:[\-–—:,]+|\(\s*)\s*(.+?)(?:\s*\))?$", s
+    )
+    if m_u:
+        s = m_u.group(1).strip()
+    # Title-case ALL-CAPS strings; preserve mixed case as-is.
+    if s and s == s.upper() and any(c.isalpha() for c in s):
+        # Lower-case the small words after the first.
+        small = {"a","an","and","of","the","in","on","with","to","at","for",
+                 "du","de","la","le","et","aux","des","les"}
+        words = s.split()
+        s = " ".join(
+            (w[:1].upper() + w[1:].lower())
+            if (i == 0 or w.lower() not in small)
+            else w.lower()
+            for i, w in enumerate(words)
+        )
+    # Safeguard against garbage output.  When the strip removed
+    # everything substantive and only metadata fragments remain
+    # ('1942-2021)' / 'b.1962)' / '1965)') return empty so the
+    # caller's metadata_signals check will flip it to NULL —
+    # better '(không tên)' than a garbage tail.
+    if (not s
+            or len(s) < 3
+            or re.match(r"^[\d.,()\s\-–—b]+$", s)
+            or re.match(r"^(?:b\.|c\.|circa|\d{4})", s, re.I)):
+        return ""
+    return s
+
+
 def fetch_lot_page(sc, url: str) -> tuple[str | None, int]:
     """Return (html, status_code).  None on transport error."""
     try:
@@ -140,31 +225,35 @@ def extract_fields(html: str, url: str) -> dict | None:
     if not title:
         return None
 
-    # Detect "no real artwork title" — sometimes the lotName on
-    # Invaluable is just artist + nationality + years + medium + dim
-    # ('Ho Huu Thu, Vietnamese 1942-2024, Mixed Medium, Lacquer and
-    # Oil on Panel, 600 mm x 600 mm; with frame: 80.5cm x 80.5cm'),
-    # which is metadata, not a title.  Operator 2026-06-28 — surface
-    # those as "(không tên)" rather than dumping the whole metadata
-    # string into the artwork_title column.
-    #
-    # Heuristic: if the title carries ≥3 of the metadata signals
-    # below, drop it.
+    # Clean Invaluable's metadata-bloated titles.  The raw lotName
+    # is often "ARTIST_NAME, NATIONALITY YYYY[-YYYY], REAL_TITLE" or
+    # similar.  Operator 2026-06-28 caught lot 19624 'Bui Huu Bai
+    # Lien Hung' surfacing as artwork_title 'HUNG, VIETNAMESE 1957,
+    # UNTITLED - STANDING WOMAN' when the real title is just
+    # 'Standing Woman'.  Strip the artist+nationality+year prefix
+    # and the leading 'Untitled - ' / 'Untitled, ' marker so what
+    # remains is the actual descriptive title.
+    title = _clean_invaluable_title(title)
+
+    # When ≥3 metadata signals remain (the prefix-strip didn't
+    # leave any real title behind) — e.g. Ho Huu Thu lot 31116
+    # where the WHOLE lotName was metadata — drop the title to
+    # NULL so the UI surfaces it as '(không tên)'.
     metadata_signals = 0
     tl = title.lower()
     if re.search(r"\b(1[89]\d{2}|20\d{2})\s*[-–—]\s*(1[89]\d{2}|20\d{2})\b", title):
-        metadata_signals += 1          # birth-death year pair
+        metadata_signals += 1
     if re.search(r"\b(vietnamese|french|american|chinese|british)\b", tl):
-        metadata_signals += 1          # nationality marker
+        metadata_signals += 1
     if re.search(r"\b(oil|lacquer|gouache|watercol|ink|acryl|tempera|"
                  r"mixed medium|mixed media|pastel)\b", tl):
-        metadata_signals += 1          # medium keyword
+        metadata_signals += 1
     if re.search(r"\d+\s*(?:mm|cm)\s*(?:x|×|by)\s*\d+", tl):
-        metadata_signals += 1          # dim pair
+        metadata_signals += 1
     if "with frame" in tl or "framed" in tl:
-        metadata_signals += 1          # frame note
+        metadata_signals += 1
     if metadata_signals >= 3:
-        title = ""                      # row will surface as "(không tên)"
+        title = ""
 
     # Description: combine ALL text signals into one blob so the
     # downstream LLM extractor (llm_extract_fields.py) has the
