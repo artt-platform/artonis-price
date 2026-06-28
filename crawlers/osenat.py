@@ -478,6 +478,28 @@ def parse_lot_description(desc_text):
         if m_y:
             out["year"] = m_y.group(1)
 
+    # Provenance — Osenat catalogs include a labelled 'Provenance:'
+    # section after the descriptive text.  The earlier split regex
+    # uses 'Provenance' as a section-cut marker but never CAPTURED
+    # the contents — the row went out with provenance="" hardcoded.
+    # Operator 2026-06-28 caught 0 Osenat lots in DB with provenance
+    # despite many descriptions containing the field (e.g. lot 4548
+    # 'Autoportrait de profil' — Bui Xuan Phai with 'Collection
+    # privée, Paris, acquis directement auprès de l'artiste dans son
+    # atelier à Hanoï vers 1979-1980.').  Capture everything from the
+    # 'Provenance' marker up to the next labelled section
+    # (Bibliographie, Exposition, Dim., Estimation, Signé) or two
+    # consecutive newlines.
+    m_prov = re.search(
+        r"Provenance\s*[:\-]?\s*(.+?)(?=\s+(?:Bibliographie|Exposition|"
+        r"Dim\.|Estimation|Sign[éE]|Non sign|Note\s|Expert\s|Cabinet)|\n\n|$)",
+        description, re.S | re.I,
+    )
+    if m_prov:
+        prov = m_prov.group(1).strip(" \t\n.,;:–-—")
+        if 10 <= len(prov) <= 1000:
+            out["provenance"] = clean_text(prov)[:1000]
+
     return out
 
 
