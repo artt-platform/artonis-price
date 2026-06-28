@@ -154,15 +154,21 @@ def _clean_invaluable_title(title: str) -> str:
             s = s[m2.end():].strip()
     # Pass 1b — strip trailing medium / technique noise that some
     # houses append: 'The Black Horse Oil Painting' → 'The Black
-    # Horse'.  Catches '... Oil Painting', '... Lacquer Painting',
-    # '... Watercolour on Paper', '... Oil on Canvas'.
-    s = re.sub(
+    # Horse'.  Only strip if a substantial title (≥ 4 chars)
+    # remains — operator 2026-06-28 caught the cleaner stripping
+    # 'Mixed Media Painting' down to empty for lots whose actual
+    # title IS just 'Mixed Media Painting' (Nguyen Gia Tri lots
+    # 19238 + 19221 at Antique Arena, where the auction catalog
+    # never gave a specific artwork title).
+    s_stripped = re.sub(
         r"(?i)\s+(?:oil|watercolor|watercolour|gouache|ink|acrylic|"
         r"lacquer|tempera|pastel|mixed media|mixed medium)"
         r"(?:\s+(?:on|painting|drawing|sketch))?"
         r"(?:\s+(?:canvas|paper|panel|board|silk|wood|cardboard))?\s*$",
         "", s,
     ).strip(" ,-–—")
+    if len(s_stripped) >= 4:
+        s = s_stripped
     # Pass 2 — unwrap Untitled markers.
     m_u = re.match(
         r"(?i)^untitled\s*(?:[\-–—:,]+|\(\s*)\s*(.+?)(?:\s*\))?$", s
@@ -336,6 +342,38 @@ def extract_fields(html: str, url: str) -> dict | None:
     width_cm, height_cm, _area_m2, dim_str = parse_dim(
         catalog_description or title, source=""
     )
+    # Image-aspect orientation cross-check (root fix).  Invaluable
+    # mirrors many US regional houses whose catalog writers swap
+    # W↔H inconsistently (see lots 19238/19221: same artist, same
+    # series, same dims, opposite orientation in DB).  Don't trust
+    # the parser's guess — fetch the lot photo, measure its aspect,
+    # and swap W/H to match the image when they conflict.  Same
+    # logic as supabase/fix_dim_orientation.py inlined here so the
+    # row is correct on FIRST insert, not after cron's next pass.
+    #
+    # Skip when either the dims or the image are near-square
+    # (< 10 % off square) — too noisy to decide a swap.
+    if width_cm and height_cm and image_url:
+        try:
+            from PIL import Image
+            import io as _io
+            ir = requests.get(image_url, timeout=12)
+            if ir.status_code == 200:
+                img = Image.open(_io.BytesIO(ir.content))
+                iw, ih = img.size
+                dim_ratio = max(width_cm, height_cm) / min(width_cm, height_cm)
+                img_ratio = max(iw, ih) / min(iw, ih)
+                # Both must be decisively non-square AND disagree
+                if dim_ratio > 1.10 and img_ratio > 1.10:
+                    dim_is_landscape = width_cm > height_cm
+                    img_is_landscape = iw > ih
+                    if dim_is_landscape != img_is_landscape:
+                        width_cm, height_cm = height_cm, width_cm
+                        dim_str = f"{width_cm:g} x {height_cm:g} cm"
+        except Exception:
+            # Image fetch / decode errors are non-fatal — orientation
+            # still gets caught by the cron pass over fix_dim_orientation.
+            pass
 
     # Medium / support_type via the existing parser stack.  When the
     # description has 'oil on canvas' / 'lacquer on panel' / etc.,
