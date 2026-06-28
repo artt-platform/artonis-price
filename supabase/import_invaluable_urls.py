@@ -140,6 +140,32 @@ def extract_fields(html: str, url: str) -> dict | None:
     if not title:
         return None
 
+    # Detect "no real artwork title" — sometimes the lotName on
+    # Invaluable is just artist + nationality + years + medium + dim
+    # ('Ho Huu Thu, Vietnamese 1942-2024, Mixed Medium, Lacquer and
+    # Oil on Panel, 600 mm x 600 mm; with frame: 80.5cm x 80.5cm'),
+    # which is metadata, not a title.  Operator 2026-06-28 — surface
+    # those as "(không tên)" rather than dumping the whole metadata
+    # string into the artwork_title column.
+    #
+    # Heuristic: if the title carries ≥3 of the metadata signals
+    # below, drop it.
+    metadata_signals = 0
+    tl = title.lower()
+    if re.search(r"\b(1[89]\d{2}|20\d{2})\s*[-–—]\s*(1[89]\d{2}|20\d{2})\b", title):
+        metadata_signals += 1          # birth-death year pair
+    if re.search(r"\b(vietnamese|french|american|chinese|british)\b", tl):
+        metadata_signals += 1          # nationality marker
+    if re.search(r"\b(oil|lacquer|gouache|watercol|ink|acryl|tempera|"
+                 r"mixed medium|mixed media|pastel)\b", tl):
+        metadata_signals += 1          # medium keyword
+    if re.search(r"\d+\s*(?:mm|cm)\s*(?:x|×|by)\s*\d+", tl):
+        metadata_signals += 1          # dim pair
+    if "with frame" in tl or "framed" in tl:
+        metadata_signals += 1          # frame note
+    if metadata_signals >= 3:
+        title = ""                      # row will surface as "(không tên)"
+
     # Description: combine ALL text signals into one blob so the
     # downstream LLM extractor (llm_extract_fields.py) has the
     # widest possible context.  Order: JSON-LD description, OG
@@ -277,9 +303,20 @@ def upsert(rec: dict) -> tuple[bool, str]:
     soldAmount field over time.  Operator 2026-06-28 caught lot
     31095 going from sold (real hammer) back to estimate_only
     (hammer=NULL) on the first test run because of exactly this.
+
+    EXCEPTION: when extract_fields explicitly set artwork_title=""
+    (the metadata-only heuristic — Ho Huu Thu lot 31116 had its
+    'title' = artist+nationality+years+medium+dim metadata) we
+    DO want to overwrite the existing bad title with empty so the
+    UI surfaces the row as '(không tên)'.  Send it as null so
+    PostgREST clears the column instead of leaving the previous
+    metadata string in place.
     """
+    explicit_clear_title = rec.get("artwork_title") == ""
     strip_authoritative(rec)
     push_safe_status(rec)
+    if explicit_clear_title:
+        rec["artwork_title"] = None
     r = requests.post(
         f"{SU}/rest/v1/sale_results?on_conflict=source_url",
         headers={**SB_W, "Prefer": "resolution=merge-duplicates"},
@@ -328,8 +365,9 @@ def main():
                 else "PASSED" if log_status == "passed"
                 else "estimate_only"
             )
+            log_title = rec.get("artwork_title") or "(không tên)"
             print(
-                f"    ✓ {tag} | {rec['artwork_title'][:60]!s:60} "
+                f"    ✓ {tag} | {log_title[:60]!s:60} "
                 f"| medium={rec.get('medium') or '-'} kind={rec.get('kind', '?')}"
             )
         else:

@@ -31,6 +31,18 @@ _DIM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Millimetre form — '600 mm x 600 mm' / '600mm × 600mm'.  Operator
+# 2026-06-28 caught Invaluable Ho Huu Thu lot 31116 where the
+# description gave artwork dim in mm ('600 mm x 600 mm') and the
+# frame in cm ('80.5cm x 80.5cm'); the parser picked up the FRAME
+# (the only cm form) and stored 80.5 × 80.5 instead of the artwork's
+# 60 × 60.  Match mm dims explicitly so they win over a later cm
+# match in the same string.
+_DIM_MM_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*(?:mm\s*)?(?:x|by|×)\s*(\d+(?:[.,]\d+)?)\s*mm",
+    re.IGNORECASE,
+)
+
 # Inch fallback — '50 x 60"' / '50" x 60"' / '50 by 60 in' / '40 x 30 inches'.
 # Used by US regional houses that Invaluable mirrors.  Caller decides
 # whether to apply HW_FIRST.
@@ -108,8 +120,50 @@ def parse_dim(text: str, source: str = "") -> tuple:
     """
     if not text:
         return (None, None, None, "")
+    # Try mm form FIRST so '600 mm x 600 mm; with frame: 80.5cm x
+    # 80.5cm' captures the artwork dim (60 cm × 60 cm) instead of
+    # the later cm match (frame).  Convert mm → cm by dividing by
+    # 10, validate against the cm bounds afterwards.
+    m_mm = _DIM_MM_RE.search(text)
+    if m_mm:
+        try:
+            a = float(m_mm.group(1).replace(',', '.')) / 10.0
+            b = float(m_mm.group(2).replace(',', '.')) / 10.0
+            if 1 <= a <= 1000 and 1 <= b <= 1000:
+                if source in HW_FIRST_SOURCES:
+                    height_cm, width_cm = a, b
+                else:
+                    width_cm, height_cm = a, b
+                area = round(width_cm * height_cm / 10000, 4)
+                disp = f"{width_cm:g} x {height_cm:g} cm"
+                return (width_cm, height_cm, area, disp)
+        except ValueError:
+            pass
     m = _DIM_RE.search(text)
     if not m:
+        # Inch fallback — '25.5 x 21 in.' / '24" x 30"'.  US regional
+        # houses (Hill Auction Gallery, Shapiro, Weschler's) on
+        # Invaluable write artwork dims in inches.  Convert to cm
+        # (× 2.54).  Operator 2026-06-28 caught Vu Cao Dam lot 31131
+        # 'The Black Horse' Invaluable URL: description had
+        # 'Work Size: 25.5 x 21 in.' but parser returned None.
+        m_in = _DIM_INCH_RE.search(text)
+        if m_in:
+            try:
+                a = float(m_in.group(1).replace(',', '.')) * 2.54
+                b = float(m_in.group(2).replace(',', '.')) * 2.54
+                if 1 <= a <= 1000 and 1 <= b <= 1000:
+                    if source in HW_FIRST_SOURCES:
+                        height_cm, width_cm = a, b
+                    else:
+                        width_cm, height_cm = a, b
+                    width_cm = round(width_cm, 1)
+                    height_cm = round(height_cm, 1)
+                    area = round(width_cm * height_cm / 10000, 4)
+                    disp = f"{width_cm:g} x {height_cm:g} cm"
+                    return (width_cm, height_cm, area, disp)
+            except ValueError:
+                pass
         return (None, None, None, "")
     try:
         a = float(m.group(1).replace(',', '.'))
