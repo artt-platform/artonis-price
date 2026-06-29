@@ -193,7 +193,7 @@ def fetch_event_lots(scraper, event_url, limit=200):
 # ─── Lot detail enrichment (optional) ────────────────────────────────────────
 
 def _enrich_from_lot_page(scraper, lot_url):
-    """Fetch lot page → extract medium + dimensions. Returns dict."""
+    """Fetch lot page → extract medium + dimensions + image. Returns dict."""
     try:
         r = scraper.get(lot_url, timeout=20, headers=HEADERS_GET)
     except Exception:
@@ -201,11 +201,26 @@ def _enrich_from_lot_page(scraper, lot_url):
     if r.status_code != 200:
         return {}
     out = {}
+    # Plain "X x Y cm" form
     m_dim = re.search(
         r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*cm",
         r.text, re.IGNORECASE,
     )
-    if m_dim:
+    # Operator 2026-06-29: global.auction wraps dims as
+    # "Height 122cm x Width 122cm" — the plain regex above misses
+    # the labelled form because it requires the unit ('cm') only
+    # ONCE (at the end).  Add a labelled-pair pattern that
+    # explicitly captures Height + Width.
+    if not m_dim:
+        m_hw = re.search(
+            r"Height\s*(\d+(?:\.\d+)?)\s*cm\s*[x×]\s*Width\s*(\d+(?:\.\d+)?)\s*cm",
+            r.text, re.IGNORECASE,
+        )
+        if m_hw:
+            # Labelled: H × W → store canonical W × H per em convention.
+            h_cm, w_cm = m_hw.group(1), m_hw.group(2)
+            out["dimensions"] = f"{w_cm} x {h_cm} cm"
+    elif m_dim:
         out["dimensions"] = f"{m_dim.group(1)} x {m_dim.group(2)} cm"
     m_med = re.search(
         r"\b(oil on canvas|acrylic on canvas|ink on (?:silk|paper)|"
@@ -217,6 +232,23 @@ def _enrich_from_lot_page(scraper, lot_url):
     )
     if m_med:
         out["medium"] = m_med.group(0).lower()
+    # Image: og:image meta + fall back to product/ image in <img>.
+    # Operator 2026-06-29: global.auction lots in DB all had
+    # image_url=NULL because the crawler didn't extract them.  The
+    # CDN URL pattern is 'aws.global.auction/product/<n>/<size>/<id>.webp'.
+    m_og = re.search(
+        r'<meta[^>]+(?:property|name)=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r.text, re.IGNORECASE,
+    )
+    if m_og:
+        out["image_url"] = m_og.group(1)
+    else:
+        m_img = re.search(
+            r'<img[^>]+src=["\'](https://aws\.global\.auction/product/[^"\']+\.(?:webp|jpg|jpeg|png))["\']',
+            r.text, re.IGNORECASE,
+        )
+        if m_img:
+            out["image_url"] = m_img.group(1)
     return out
 
 

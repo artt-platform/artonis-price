@@ -98,6 +98,16 @@ PAT_EST_HIGH = re.compile(r'"highEstimate"\s*:\s*(\d+(?:\.\d+)?)')
 PAT_CURRENCY = re.compile(r'"currencyCode"\s*:\s*"([A-Z]{3})"')
 PAT_AUCTION_HOUSE = re.compile(r'"houseName"\s*:\s*"([^"]+)"')
 PAT_AUCTION_LOCATION = re.compile(r'"location"\s*:\s*"([^"]+)"')
+# og:description fallback — Invaluable always writes
+#   "Bid now on Invaluable: <desc> from <HOUSE NAME> on <DATE> ..."
+# so the bare 'from X on Y' run is a reliable second source when
+# the JSON island doesn't carry houseName.  Operator 2026-06-29
+# caught lots 31133/31134 stored as auction_title='Invaluable
+# (via Invaluable)' because the JSON had no houseName and the
+# importer fell back to the platform name.
+PAT_HOUSE_FROM_OG = re.compile(
+    r"from\s+([A-Z][A-Za-z0-9\s&,.\-'\"]+?)\s+on\s+(?:\w+\s+\d+,?\s*\d{4})"
+)
 PAT_SALE_DATE = re.compile(r'"saleDate"\s*:\s*"(\d{4}-\d{2}-\d{2})')
 PAT_IMAGE_URL = re.compile(
     r'"(?:imageUrl|photoUrl)"\s*:\s*"(https?://[^"]+\.(?:jpg|jpeg|png))"',
@@ -339,6 +349,28 @@ def extract_fields(html: str, url: str) -> dict | None:
     house = (PAT_AUCTION_HOUSE.search(html) or [None, ""])[1]
     location = (PAT_AUCTION_LOCATION.search(html) or [None, ""])[1]
     sale_date = (PAT_SALE_DATE.search(html) or [None, ""])[1]
+    # Fallback: parse 'from <HOUSE> on <DATE>' from og:description
+    # when JSON-island houseName is missing.  Strip trailing
+    # punctuation / auction-platform suffixes ('via Invaluable') so
+    # the stored auction_title is the upstream house name only.
+    if not house or house.strip().lower() == "invaluable":
+        # Look in og:description / meta description first — they always
+        # contain the 'from X on Y' line verbatim.
+        for sel in ('meta[property="og:description"]',
+                    'meta[name="description"]'):
+            el = soup.select_one(sel)
+            if el and el.get("content"):
+                m_h = PAT_HOUSE_FROM_OG.search(el["content"])
+                if m_h:
+                    house = m_h.group(1).strip(" .,;:\"'")
+                    # If the captured name ends with 'Auctions' /
+                    # 'Auction' / 'Gallery' / 'Galleries' just leave
+                    # it as-is — that's how the house brands itself.
+                    break
+    # If location still empty, default to the house name (better than
+    # storing 'Invaluable' which is the aggregator, not a place).
+    if not location or location.strip().lower() == "invaluable":
+        location = house or location
 
     # Status / hammer.  Same logic as pull_invaluable_hammers.py
     # except em insert side: closed-with-sold → sold; closed-no-sold
@@ -458,11 +490,16 @@ def upsert(rec: dict) -> tuple[bool, str]:
     PostgREST clears the column instead of leaving the previous
     metadata string in place.
     """
-    explicit_clear_title = rec.get("artwork_title") == ""
+    # Operator 2026-06-29: REMOVED the explicit_clear_title=None
+    # path.  When em cleaner can't produce a usable title for an
+    # existing row, do NOT overwrite the row's current title with
+    # NULL — that wiped 'Chevaux Orientaux' (lot 31133) and 'Le
+    # Cavalier' (lot 31134) just because the Invaluable lotName
+    # was a full descriptive run instead of a quoted title.  When
+    # artwork_title is "" / None, let strip_authoritative drop the
+    # key so PostgREST preserves whatever Supabase already holds.
     strip_authoritative(rec)
     push_safe_status(rec)
-    if explicit_clear_title:
-        rec["artwork_title"] = None
     r = requests.post(
         f"{SU}/rest/v1/sale_results?on_conflict=source_url",
         headers={**SB_W, "Prefer": "resolution=merge-duplicates"},
