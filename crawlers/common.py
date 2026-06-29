@@ -12,7 +12,99 @@ from artonis_price_mvp import (
 
 __all__ = ["parse_amount", "parse_date", "insert_sale_result", "to_usd", "clean_text",
            "FX_TO_USD", "clean_artist_name", "log_crawl_run",
-           "derive_lot_fields", "manual_import_lot"]
+           "derive_lot_fields", "manual_import_lot", "verify_dim_via_image"]
+
+
+def verify_dim_via_image(width_cm, height_cm, image_url,
+                         min_aspect=1.10, timeout=12, _cache=None):
+    """Cross-check a row's (width_cm, height_cm) against the catalog
+    image's pixel aspect.  Return a CORRECTED (W, H) pair — swapped
+    when the dim convention conflicts with the image orientation.
+
+    Operator 2026-06-29 — every crawler we run guesses W/H from a
+    source-specific convention (HW_FIRST_SOURCES in parsers/dim.py).
+    The guess is right ~70 % of the time and wrong the rest, so
+    fix_dim_orientation.py runs nightly to clean up.  Between insert
+    and the cron tick, the row carries the wrong orientation; the
+    user sees that on the live site.  This helper applies the same
+    image-aspect rule INLINE during sync, so every crawler benefits
+    without 25 separate edits.
+
+    Args:
+        width_cm, height_cm: floats from the crawler.  Returned
+            unchanged when image fetch / decode fails, when either
+            input is None, or when ambiguous (dim or image is
+            within 10 % of square — the aspect signal isn't strong
+            enough to override the catalog's convention).
+        image_url: catalog photo URL.  When None / empty, returns
+            (W, H) unchanged.
+        min_aspect: skip the swap when either aspect is < this.
+            1.10 = ignore differences below 10 %, which matches the
+            heuristic in fix_dim_orientation.py.
+        timeout: per-request fetch timeout.
+        _cache: optional dict for memoising fetches across calls
+            in the same batch (avoids re-downloading the same image
+            when several rows share one URL).
+
+    Returns:
+        (corrected_width_cm, corrected_height_cm).  Either same as
+        input (no swap) or swapped.  Never raises — image fetch
+        errors fall through to the unchanged input.
+    """
+    if width_cm is None or height_cm is None or not image_url:
+        return (width_cm, height_cm)
+    try:
+        dim_ratio = max(width_cm, height_cm) / min(width_cm, height_cm)
+    except (TypeError, ZeroDivisionError):
+        return (width_cm, height_cm)
+    if dim_ratio < min_aspect:
+        return (width_cm, height_cm)  # near-square dim — leave alone
+    # Image fetch / measure
+    if _cache is not None and image_url in _cache:
+        size = _cache[image_url]
+    else:
+        try:
+            import requests
+            from PIL import Image
+            import io as _io
+            r = requests.get(image_url, timeout=timeout)
+            if r.status_code != 200:
+                if _cache is not None:
+                    _cache[image_url] = None
+                return (width_cm, height_cm)
+            img = Image.open(_io.BytesIO(r.content))
+            size = img.size  # (iw, ih)
+            # EXIF orientation: tags 5-8 mean rotated 90°; PIL.size
+            # returns raw pixel dims so flip when EXIF says rotate.
+            try:
+                from PIL import ExifTags
+                ex = img._getexif() if hasattr(img, "_getexif") else None
+                if ex:
+                    for tag_id, val in ex.items():
+                        if ExifTags.TAGS.get(tag_id) == "Orientation" and val in (5, 6, 7, 8):
+                            size = (size[1], size[0])
+                            break
+            except Exception:  # noqa: BLE001
+                pass
+            if _cache is not None:
+                _cache[image_url] = size
+        except Exception:  # noqa: BLE001
+            if _cache is not None:
+                _cache[image_url] = None
+            return (width_cm, height_cm)
+    if not size:
+        return (width_cm, height_cm)
+    iw, ih = size
+    if iw <= 0 or ih <= 0:
+        return (width_cm, height_cm)
+    img_ratio = max(iw, ih) / min(iw, ih)
+    if img_ratio < min_aspect:
+        return (width_cm, height_cm)  # near-square image — ambiguous
+    dim_landscape = width_cm > height_cm
+    img_landscape = iw > ih
+    if dim_landscape != img_landscape:
+        return (height_cm, width_cm)  # swap
+    return (width_cm, height_cm)
 
 
 def log_crawl_run(conn, source, target_slug=None, started_at=None, finished_at=None,

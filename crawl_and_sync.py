@@ -184,6 +184,12 @@ def sync_to_supabase(conn, source, since_scraped_at):
         norm = normalize_key(raw_name)
         return name_to_id.get(norm) or catalog_alias_to_canonical.get(norm)
 
+    # Per-source in-memory image cache for the dim-orientation
+    # cross-check so multiple rows sharing a URL only fetch once.
+    from crawlers.common import verify_dim_via_image
+    _dim_image_cache: dict = {}
+    _orientation_swapped = 0
+
     payload = []
     for r in rows:
         d = dict(r)
@@ -206,6 +212,27 @@ def sync_to_supabase(conn, source, since_scraped_at):
         if sup and sup not in ('canvas', 'silk', 'paper', 'lacquer', 'panel', 'metal'):
             sup = None
         d['support_type'] = sup
+        # Image-aspect orientation cross-check (operator-mandated
+        # 2026-06-29 — "Làm! và đảm bảo ko sai gì nữa thêm").  All
+        # 25+ crawlers guess W/H from a source-specific convention
+        # (HW_FIRST_SOURCES in parsers/dim.py); the guess is right
+        # ~70 % of the time and fix_dim_orientation.py cleans up the
+        # rest nightly.  Run the same image-aspect rule INLINE here
+        # so every crawler's rows are correct on the FIRST sync,
+        # not after the next 4-hourly cron tick.  Shared in-memory
+        # cache across the loop so multiple rows pointing at the
+        # same image only pay one fetch.
+        if d.get("width_cm") and d.get("height_cm") and d.get("image_url"):
+            new_w, new_h = verify_dim_via_image(
+                d["width_cm"], d["height_cm"], d["image_url"],
+                _cache=_dim_image_cache,
+            )
+            if (new_w, new_h) != (d["width_cm"], d["height_cm"]):
+                d["width_cm"], d["height_cm"] = new_w, new_h
+                d["dimensions"] = f"{new_w:g} x {new_h:g} cm"
+                if new_w and new_h:
+                    d["area_m2"] = round(new_w * new_h / 10000, 4)
+                _orientation_swapped += 1
         # Drop every column owned by a Supabase-side script when
         # SQLite has null/empty.  Canonical list lives in
         # supabase/sync_protect.py — add new columns there, not here.
@@ -239,6 +266,8 @@ def sync_to_supabase(conn, source, since_scraped_at):
     if skipped_manual:
         print(f"  ↻ skipped {skipped_manual} manually-edited rows "
               "(updated_at > scraped_at + gap)")
+    if _orientation_swapped:
+        print(f"  ↻ image-aspect swapped W↔H on {_orientation_swapped} rows")
 
     # Group rows by their key signature so each PostgREST batch has
     # uniform columns.  Operator 2026-06-28: strip_authoritative drops
