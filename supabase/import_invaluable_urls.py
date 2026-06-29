@@ -213,7 +213,13 @@ def fetch_lot_page(sc, url: str) -> tuple[str | None, int]:
 def extract_fields(html: str, url: str) -> dict | None:
     """Pull every structured field we can out of the Invaluable lot
     page.  Returns a dict ready to UPSERT, or None when the page
-    looks too thin (no title + no description) to be a valid lot."""
+    looks too thin (no title + no description) to be a valid lot
+    OR when the universal attribution gate fires (see SPEC §13:
+    'Attributed to X' / 'School of X' / 'After X' / 'Manner of X' /
+    'Circle of X' / 'Follower of X' / 'Studio of X' / 'd'après' /
+    'atelier' are NOT confirmed works of the artist — they belong
+    to a different market segment and must not be inserted under
+    artist_id of X)."""
     soup = BeautifulSoup(html, "html.parser")
 
     # Title: prefer JSON lotName, fall back to lotTitle, then <title>.
@@ -229,6 +235,19 @@ def extract_fields(html: str, url: str) -> dict | None:
         except json.JSONDecodeError:
             pass
     if not title:
+        return None
+
+    # Universal attribution gate.  Operator 2026-06-29 caught lot
+    # 19314 ('Attributed to Bui Xuan Phai' from Invaluable Topwells)
+    # surviving every other filter because em batch importer
+    # bypassed the central crawlers.parsers.is_attribution check
+    # that crawlers/invaluable.py runs.  Wire the same check here so
+    # 'Attributed to' / 'After X' / 'Manner of' / 'School of' / etc.
+    # lots are rejected at extract_fields() — they NEVER reach
+    # upsert() and never get an artist_id attribution they don't
+    # deserve.
+    from crawlers.parsers import is_attribution
+    if is_attribution(url, title):
         return None
 
     # Clean Invaluable's metadata-bloated titles.  The raw lotName
