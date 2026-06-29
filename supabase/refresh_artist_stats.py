@@ -23,7 +23,7 @@ all_sales = []
 from_idx = 0
 while True:
     r = requests.get(
-        f"{URL}/rest/v1/sale_results?select=artist_id,price_usd,price_with_premium_usd&order=id&limit=1000&offset={from_idx}",
+        f"{URL}/rest/v1/sale_results?select=artist_id,price_usd,price_with_premium_usd,kind&order=id&limit=1000&offset={from_idx}",
         headers={'apikey': KEY}, timeout=30
     )
     chunk = r.json()
@@ -43,6 +43,17 @@ agg = {}
 for s in all_sales:
     aid = s.get('artist_id')
     if not aid: continue
+    # Operator rule 2026-06-29: artist range ONLY counts paintings.
+    # Drawings (Crayon sur papier 30×24), prints (lithograph editions),
+    # sculptures (bronze busts), and medals are distinct market
+    # segments with their own price tiers — mixing them under the
+    # single "Giá đấu giá" range gives nonsense ranges like
+    # $816–$1.01M for Lê Thị Lựu where the $816 floor is a single
+    # 30×24 cm pencil sketch and the $1.01M ceiling is a gouache-on-
+    # silk masterwork.  classify_kind assigns kind on every row
+    # (default 'painting'); skip anything else from the aggregate.
+    if s.get('kind') and s.get('kind') != 'painting':
+        continue
     p = s.get('price_with_premium_usd') or s.get('price_usd')
     if p is None or p <= 0: continue
     if aid not in agg:
