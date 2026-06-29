@@ -183,3 +183,76 @@ def fetch_supabase_state(supabase_url: str, service_key: str,
             for row in r.json():
                 out[row["source_url"]] = row
     return out
+
+
+def safe_patch_dim(
+    supabase_url: str, service_key: str,
+    lot_id: int, width_cm: float, height_cm: float,
+    image_url: str | None = None,
+) -> tuple[bool, dict]:
+    """The ONLY way to write width_cm / height_cm to a sale_results
+    row from an ad-hoc or inline script.
+
+    Cross-checks the (w, h) pair against the lot's catalog image and
+    SWAPS automatically when the orientation conflicts.  Then PATCHes
+    width_cm + height_cm + dimensions string + area_m2 in one shot.
+
+    Operator rule 2026-06-29: every inline PATCH that ever wrote dim
+    columns has been wrong on orientation at some point because each
+    one re-implemented the W vs H guess from scratch.  Funneling
+    every write through this helper means em can't "forget" the
+    image-aspect verification — there is no other path.
+
+    Args:
+        supabase_url, service_key: from .env.local
+        lot_id: sale_results.id
+        width_cm, height_cm: parser's best guess.  May be swapped
+            internally if image disagrees.
+        image_url: optional — when None, the function fetches the row's
+            image_url from Supabase before the aspect check.
+
+    Returns:
+        (success, patched_dict).  patched_dict contains the FINAL
+        (post-swap) values so the caller can log what shipped.
+    """
+    import requests
+    headers = {"apikey": service_key,
+               "Authorization": f"Bearer {service_key}",
+               "Content-Type": "application/json",
+               "Prefer": "return=minimal"}
+
+    # Pull image_url when caller didn't supply one — single round-trip.
+    if image_url is None:
+        gr = requests.get(
+            f"{supabase_url}/rest/v1/sale_results",
+            params={"id": f"eq.{lot_id}", "select": "image_url"},
+            headers={"apikey": service_key,
+                     "Authorization": f"Bearer {service_key}"},
+            timeout=10,
+        )
+        if gr.status_code == 200:
+            rows = gr.json()
+            if rows:
+                image_url = rows[0].get("image_url") or ""
+
+    # Verify orientation against image.  verify_dim_via_image lives in
+    # crawlers/common.py — import lazily so this module doesn't drag
+    # the whole crawlers package in for callers that don't need dim.
+    from crawlers.common import verify_dim_via_image
+    new_w, new_h = verify_dim_via_image(width_cm, height_cm, image_url)
+
+    area = None
+    if new_w is not None and new_h is not None:
+        area = round(new_w * new_h / 10000, 4)
+    patch = {
+        "width_cm": new_w,
+        "height_cm": new_h,
+        "dimensions": f"{new_w:g} x {new_h:g} cm" if (new_w and new_h) else None,
+        "area_m2": area,
+    }
+    r = requests.patch(
+        f"{supabase_url}/rest/v1/sale_results",
+        params={"id": f"eq.{lot_id}"},
+        headers=headers, json=patch, timeout=10,
+    )
+    return (r.status_code < 300), patch
