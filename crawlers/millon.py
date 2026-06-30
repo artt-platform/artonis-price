@@ -47,6 +47,59 @@ def _extract_adjuge_eur(html):
     return _to_eur_amount(m.group(1)) if m else None
 
 
+# Listing-page format — DIFFERENT from lot detail.  Catalog listing
+# pages show realised hammers as 'Adjugé à |&nbsp; 310 000 €' in a
+# flat span (not the lot-detail '<p class="title">Adjugé à</p>...').
+# Operator 2026-06-30 caught 71 vente-4442 lots stuck at
+# status=estimate_only because the per-lot detail page lacked the
+# class="title" markup the original regex required, but the listing
+# page (which the crawler skipped for hammer purposes) had every
+# hammer right there.  One fetch per vente, return {lot_url → hammer}.
+_LISTING_LOT_HREF_RE = re.compile(
+    r'<a[^>]+href="(/catalogue/[^"]+/lot[^"]+)"', re.IGNORECASE,
+)
+_LISTING_ADJUGE_RE = re.compile(
+    r"Adjug[ée]\s+[àa][^\d]+(\d[\d\s  .,]*)\s*€",
+)
+
+
+def _fetch_listing_hammers(scraper, slug):
+    """Fetch a Millon catalog listing page and return
+    {lot_url → hammer_eur_float}.  Returns {} on fetch failure or
+    when the listing has no realised-hammer markers (auction not
+    closed yet)."""
+    out: dict[str, float] = {}
+    try:
+        # 'sort=adjuge-desc' brings hammered lots to the top so the
+        # listing markup keeps the 'Adjugé à' span next to each card.
+        url = (f"https://www.millon.com/catalogue/{slug}"
+               "?sort=adjuge-desc")
+        r = scraper.get(url, timeout=25)
+        if r.status_code != 200:
+            return out
+        html = r.text
+        for m in _LISTING_LOT_HREF_RE.finditer(html):
+            lot_path = m.group(1)
+            # Look ahead 5KB for an 'Adjugé à |X €' adjacent to THIS
+            # lot card — Millon emits the price span inside the same
+            # <article> as the <a href> so 5KB is plenty.
+            window = html[m.start():m.start() + 5000]
+            pm = _LISTING_ADJUGE_RE.search(window)
+            if not pm:
+                continue
+            amount = _to_eur_amount(pm.group(1))
+            if amount is None or amount <= 0:
+                continue
+            full_url = f"https://www.millon.com{lot_path}"
+            # Listing emits each lot card more than once across the
+            # sort pagination; first-wins is fine — same lot prints
+            # the same hammer.
+            out.setdefault(full_url, amount)
+    except Exception:  # noqa: BLE001 — best-effort; missing hammers
+        pass                                  # stay as estimate_only.
+    return out
+
+
 def _extract_estimation_eur(html):
     m = _ESTIMATION_RE.search(html or '')
     if not m:
@@ -583,11 +636,26 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
                           status="error", note=str(e)[:200])
             continue
 
+        # Listing-page hammers (operator 2026-06-30).  Fetch ONCE per
+        # catalog and build a {lot_url → hammer_eur} map.  Used as a
+        # fallback when the lot-detail-page _extract_adjuge_eur misses
+        # because the realised price markup differs between Millon's
+        # two layouts.  No-op when the auction hasn't closed yet —
+        # the listing page just won't have 'Adjugé à' markers.
+        listing_hammers = _fetch_listing_hammers(scraper, slug)
+
         inserted_this = 0
         for rec in records:
             url_low = (rec["lot_url"] or "").lower()
-            # Skip attribution lots up front (no need to fetch detail)
-            if re.search(r"-(?:attribue|attribue-a|et-son-atelier|et-atelier|d-apres|atelier-de|ecole-de|entourage-de|cercle-de|cours-de|after)(?:-|$)", url_low):
+            # Skip attribution lots up front (no need to fetch detail).
+            # Operator 2026-06-29 caught 11 Mai Trung Thứ 'd'après'
+            # lots (URL slug ...-1906-1980-dapres) in DB — em's regex
+            # only matched 'd-apres' with the hyphen, not 'dapres' as
+            # Millon slugifies the apostrophe-free form.  Add both
+            # spellings + delegate to the central is_attribution()
+            # so future markers stay in sync with crawlers/parsers.
+            from crawlers.parsers import is_attribution
+            if is_attribution(rec.get("lot_url") or "", ""):
                 continue
             # Pre-filter: check URL slug-artist against VN whitelist BEFORE fetching detail.
             # The slug encodes the artist name (e.g. lot6-nguyen-nam-son-1890-1973 → "nguyen nam son"),
@@ -641,7 +709,15 @@ def crawl_past_catalogs(conn, catalog_slugs=None, delay=1.5, detail_delay=1.2, v
             # Hammer price now comes from the detail page (Adjugé à marker)
             # rather than the catalog /resultat regex.  Lots without a
             # hammer (unsold / no result published) record as estimate_only.
-            hammer = details.get("hammer_eur") or rec.get("hammer_price")
+            # Listing-page fallback (operator 2026-06-30): some Millon
+            # ventes (e.g. 4442) only show the hammer in the catalog
+            # listing markup, not the lot-detail page.  Use the
+            # listing_hammers map built once per catalog above.
+            hammer = (
+                details.get("hammer_eur")
+                or listing_hammers.get(rec["lot_url"])
+                or rec.get("hammer_price")
+            )
             status = "sold" if hammer else "estimate_only"
 
             cat_title, cat_date = _fetch_catalog_meta(scraper, slug)
