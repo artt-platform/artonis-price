@@ -210,18 +210,40 @@ def _fetch_lot_details(scraper, lot_url):
                 if ld_desc:
                     break
 
-        # Pick the description that actually carries dim/medium info —
-        # prefer the longest body candidate that contains 'cm' or 'diam'
-        # (signals the dim line is present), then JSON-LD, then meta.
-        candidates = [body_desc, ld_desc, meta_desc]
-        with_dim = [d for d in candidates if d and ("cm" in d.lower() or "diam" in d.lower())]
-        desc = max(with_dim, key=len) if with_dim else (max(candidates, key=len) if any(candidates) else "")
-        # Use shared parsers (SPEC §10).  Millon = HW_FIRST convention.
-        # parse_dim_smart handles labelled formats (H./L., diameter, …)
-        # before falling back to the source-convention parser.
+        # Pick the description that actually carries the dim line —
+        # operator 2026-06-30 caught lot 11 of vente 4442 (Nguyễn
+        # Phan Chánh) where body_desc was the LONGEST candidate
+        # (filled with surrounding UI like "Estimation: 50 000 € - 80
+        # 000 €") and "cm" appeared in it by coincidence, but the
+        # actual dim line "50 x 31.5 cm" lived only in the JSON-LD
+        # description.  max(len) picked body, parse_dim_smart found
+        # nothing, the row went out with dim=''.
+        #
+        # New rule: try parse_dim_smart on EACH candidate; pick the
+        # first one that actually yields a width+height.  Store THAT
+        # candidate as catalog_description so downstream backfills
+        # (LLM, retry) see the same dim-bearing text.  If no candidate
+        # yields dim, fall back to longest-with-cm for storage so
+        # other extractors still have signal.
         from crawlers.parsers import extract_medium
         from crawlers.parsers.dim import parse_dim_smart
-        width_cm, height_cm, area_m2, dims = parse_dim_smart(desc, source="millon")
+        candidates = [body_desc, ld_desc, meta_desc]
+        desc = ""
+        width_cm = height_cm = area_m2 = None
+        dims = ""
+        for cand in candidates:
+            if not cand:
+                continue
+            w, h, a, d = parse_dim_smart(cand, source="millon")
+            if w and h:
+                desc = cand
+                width_cm, height_cm, area_m2, dims = w, h, a, d
+                break
+        if not desc:
+            # No candidate yielded dim — store the longest one that at
+            # least mentions 'cm' or 'diam' so LLM/retry has signal.
+            with_dim = [d for d in candidates if d and ("cm" in d.lower() or "diam" in d.lower())]
+            desc = max(with_dim, key=len) if with_dim else (max(candidates, key=len) if any(candidates) else "")
         medium = extract_medium(desc)
         # Millon-specific FR fallback when shared list misses
         # (catches phrases that aren't in the canonical medium list).
