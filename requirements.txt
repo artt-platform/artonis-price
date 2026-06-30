@@ -3,3 +3,9 @@ beautifulsoup4>=4.12
 cloudscraper>=1.2.71
 playwright>=1.40
 anthropic>=0.105
+# Image handling — fix_dim_orientation*.py + backfill_image_phash.py
+# fetch catalog photos and read pixel aspect.  Without these the cron
+# post-crawl steps fail with 'ModuleNotFoundError: No module named PIL'
+# (operator caught 2026-06-30 in run 28381698554 log).
+Pillow>=10.0
+imagehash>=4.3

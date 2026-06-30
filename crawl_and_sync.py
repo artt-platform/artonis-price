@@ -54,13 +54,21 @@ H = {
 
 # Crawler config: (mod_key, module_path, db_source_name, entry_func_name)
 ALL_CRAWLERS = [
+    # Operator 2026-06-30: Millon moved to FIRST.  Daily cron has a
+    # 5-hour GitHub Actions ceiling and the previous order (millon
+    # at position 11) meant 2 consecutive daily runs hit the ceiling
+    # while still iterating Millon catalogs — operator saw cron
+    # hadn't run Millon since 2026-06-26 even though the daily job
+    # was 'including' it in the CRAWLERS_LIST.  Heavy/slow crawlers
+    # run AFTER Millon so any subsequent timeout doesn't starve it.
+    ('millon',         'crawlers.millon',         'millon',         'crawl_all'),
+    ('millon_past',    'crawlers.millon',         'millon',         'crawl_past_broad'),
     ('christies',      'crawlers.christies',      'christies',      'crawl'),
     ('sothebys',       'crawlers.sothebys',       'sothebys',       'crawl'),
     ('phillips',       'crawlers.phillips',       'phillips',       'crawl'),
     ('bonhams',        'crawlers.bonhams',        'bonhams',        'crawl_all'),
     ('aguttes',        'crawlers.aguttes',        'aguttes',        'crawl'),
     ('tajan',          'crawlers.tajan',          'tajan',          'crawl'),
-    ('artcurial',      'crawlers.artcurial',      'artcurial',      'crawl'),
     ('drouot',         'crawlers.drouot',         'drouot',         'crawl'),
     # Drouot 4-hourly refetch — option C of SPEC §14.4.  Lightweight:
     # only refetches watchlist URLs whose sale_date is within 24h.
@@ -72,8 +80,12 @@ ALL_CRAWLERS = [
     ('le_auction',     'crawlers.le_auction',     'le_auction',     'crawl'),
     # Heritage Auctions — DataDome anti-bot blocked, requires manual cookies (excluded):
     # ('heritage',       'crawlers.heritage',       'heritage',       'crawl'),
-    ('millon',         'crawlers.millon',         'millon',         'crawl_all'),
-    ('millon_past',    'crawlers.millon',         'millon',         'crawl_past_broad'),
+    # artcurial moved to AFTER Millon — it consistently runs 3+ hours
+    # (10911s = 3h on 2026-06-29) and was the primary reason the
+    # 5-hour timeout fired while Millon was still queued.  When it
+    # eventually does hit the ceiling, the other crawlers above have
+    # already finished.
+    ('artcurial',      'crawlers.artcurial',      'artcurial',      'crawl'),
     # millon-vietnam.com is a MIRROR of millon.com — every lot
     # appears under both domains.  Crawling it caused 268 duplicate
     # rows (deleted 2026-06-28).  Per SPEC §3.7, only millon.com is
