@@ -517,15 +517,20 @@ def _find_existing_direct_match(rec: dict) -> int | None:
     Match criteria (all required):
       - Same sale_date
       - Same dimensions string
-      - Same artist (by artist_id when both are linked, OR same
-        artist_name_raw lower-cased)
-      - Either same artwork_title OR image_phash within 10/64 Hamming
+      - Same artist (resolved by artist_id via Supabase
+        normalized_name → canonical id mapping; falls back to
+        artist_name_raw ilike when no id resolves)
+      - Either title overlap OR image_phash within 10/64 Hamming
 
-    Operator 2026-06-30 caught lot 31058 (Invaluable mirror of Do
-    Quang Em 'Mother and Child' Bonhams 2025-03-31) sitting in DB
-    alongside the authoritative Bonhams direct lot 844 — same
-    artwork, two rows, polluting cluster counts.  Insert-time dedup
-    here prevents the mirror from ever landing.
+    Operator 2026-06-30 caught lot 31163 (Invaluable mirror of Lê
+    Thị Lựu 'La Confidence' Christies HK 2019-11-24) AFTER the
+    earlier dedup commit — the artist-name-raw ilike pattern was
+    matching 'Lê Thị Lựu' (Invaluable insert, diacritics intact)
+    against 'Le Thi Luu' (Christies insert, ASCII-stripped).  ilike
+    is case-insensitive but NOT diacritic-insensitive, so the
+    cross-source name comparison missed the match.  Switch the
+    lookup key to artist_id (canonical, set by upsert_artist via
+    normalized_name) so diacritic differences don't slip the gate.
     """
     sale_date = rec.get("sale_date")
     dim = rec.get("dimensions")
@@ -533,14 +538,33 @@ def _find_existing_direct_match(rec: dict) -> int | None:
     phash = rec.get("image_phash")
     if not sale_date or not dim:
         return None
+    # Resolve artist_id from artist_name_raw via normalized_name lookup.
+    artist_id = None
+    if rec.get("artist_name_raw"):
+        try:
+            from artonis_price_mvp import normalize_key
+            norm = normalize_key(rec["artist_name_raw"])
+            ar = requests.get(
+                f"{SU}/rest/v1/artists",
+                params={"normalized_name": f"eq.{norm}", "select": "id"},
+                headers=SB_R, timeout=10,
+            )
+            if ar.status_code == 200 and ar.json():
+                artist_id = ar.json()[0]["id"]
+        except Exception:  # noqa: BLE001
+            pass
     params = {
         "sale_date": f"eq.{sale_date}",
         "dimensions": f"eq.{dim}",
         "source": "neq.invaluable",  # only direct sources count as auth.
-        "select": "id,artwork_title,image_phash,artist_name_raw",
+        "select": "id,artwork_title,image_phash,artist_id,artist_name_raw",
         "limit": "20",
     }
-    if rec.get("artist_name_raw"):
+    # Prefer artist_id (diacritic-insensitive); fall back to ilike on
+    # name when em couldn't resolve id (new artist not yet in catalog).
+    if artist_id is not None:
+        params["artist_id"] = f"eq.{artist_id}"
+    elif rec.get("artist_name_raw"):
         params["artist_name_raw"] = f"ilike.*{rec['artist_name_raw'][:30]}*"
     try:
         r = requests.get(f"{SU}/rest/v1/sale_results",
