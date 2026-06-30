@@ -98,8 +98,51 @@ def verify_dim_via_image(width_cm, height_cm, image_url,
     if iw <= 0 or ih <= 0:
         return (width_cm, height_cm)
     img_ratio = max(iw, ih) / min(iw, ih)
+    # When raw pixel aspect is near-square, the image is likely a
+    # PADDED THUMBNAIL (catalog houses + Invaluable mirror serve
+    # 1000×1000 square crops with white borders around the actual
+    # painting).  Try to detect the painting's bounding box inside
+    # the padding and use ITS aspect instead of the thumbnail's.
+    # Operator 2026-06-30 caught lot 31131 stored under a Hill
+    # Auction Gallery 1000×1000 thumbnail — em's pixel-aspect check
+    # gave up at "near square", but the painting bbox inside is
+    # 818×993 (Portrait, aspect 1.21).
     if img_ratio < min_aspect:
-        return (width_cm, height_cm)  # near-square image — ambiguous
+        try:
+            import requests as _req
+            from PIL import Image, ImageChops
+            import io as _io
+            if image_url:
+                rr = _req.get(image_url, timeout=timeout)
+                if rr.status_code == 200:
+                    img = Image.open(_io.BytesIO(rr.content)).convert("RGB")
+                    # Pick the corner pixel that appears most often
+                    # across all four corners — that's the background.
+                    iw2, ih2 = img.size
+                    px = img.load()
+                    corners = [px[0, 0], px[iw2 - 1, 0],
+                               px[0, ih2 - 1], px[iw2 - 1, ih2 - 1]]
+                    from collections import Counter as _Counter
+                    bg = _Counter(corners).most_common(1)[0][0]
+                    bg_img = Image.new("RGB", img.size, bg)
+                    bbox = ImageChops.difference(img, bg_img).getbbox()
+                    if bbox:
+                        x1, y1, x2, y2 = bbox
+                        bw, bh = x2 - x1, y2 - y1
+                        # Use bbox aspect ONLY when it's decisively
+                        # non-square AND smaller than the raw image
+                        # by a meaningful margin (= padding was
+                        # detected, not the image filling the frame).
+                        if bw > 0 and bh > 0:
+                            bb_ratio = max(bw, bh) / min(bw, bh)
+                            shrink_frac = (bw * bh) / (iw2 * ih2)
+                            if bb_ratio >= min_aspect and shrink_frac < 0.97:
+                                iw, ih = bw, bh
+                                img_ratio = bb_ratio
+        except Exception:  # noqa: BLE001
+            pass
+    if img_ratio < min_aspect:
+        return (width_cm, height_cm)  # genuinely square / un-decidable
     dim_landscape = width_cm > height_cm
     img_landscape = iw > ih
     if dim_landscape != img_landscape:
