@@ -509,6 +509,70 @@ def upsert(rec: dict) -> tuple[bool, str]:
         (r.text[:200] if r.status_code >= 300 else "ok")
 
 
+def _find_existing_direct_match(rec: dict) -> int | None:
+    """Look for an EXISTING row from a DIRECT (non-Invaluable) crawler
+    that matches this Invaluable lot.  Used to skip the Invaluable
+    mirror when em already have the authoritative direct version.
+
+    Match criteria (all required):
+      - Same sale_date
+      - Same dimensions string
+      - Same artist (by artist_id when both are linked, OR same
+        artist_name_raw lower-cased)
+      - Either same artwork_title OR image_phash within 10/64 Hamming
+
+    Operator 2026-06-30 caught lot 31058 (Invaluable mirror of Do
+    Quang Em 'Mother and Child' Bonhams 2025-03-31) sitting in DB
+    alongside the authoritative Bonhams direct lot 844 — same
+    artwork, two rows, polluting cluster counts.  Insert-time dedup
+    here prevents the mirror from ever landing.
+    """
+    sale_date = rec.get("sale_date")
+    dim = rec.get("dimensions")
+    title = (rec.get("artwork_title") or "").strip()
+    phash = rec.get("image_phash")
+    if not sale_date or not dim:
+        return None
+    params = {
+        "sale_date": f"eq.{sale_date}",
+        "dimensions": f"eq.{dim}",
+        "source": "neq.invaluable",  # only direct sources count as auth.
+        "select": "id,artwork_title,image_phash,artist_name_raw",
+        "limit": "20",
+    }
+    if rec.get("artist_name_raw"):
+        params["artist_name_raw"] = f"ilike.*{rec['artist_name_raw'][:30]}*"
+    try:
+        r = requests.get(f"{SU}/rest/v1/sale_results",
+                         params=params, headers=SB_R, timeout=15)
+        if r.status_code != 200:
+            return None
+        candidates = r.json()
+    except Exception:  # noqa: BLE001
+        return None
+    title_norm = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+    for c in candidates:
+        c_title = (c.get("artwork_title") or "")
+        c_title_norm = re.sub(r"[^a-z0-9]+", " ", c_title.lower()).strip()
+        # Title overlap test — one contains the other (handles
+        # Invaluable's metadata-bloated title "1942-2021) Mother and
+        # Child" vs the Bonhams direct "Mother and Child").
+        if title_norm and c_title_norm:
+            if title_norm in c_title_norm or c_title_norm in title_norm:
+                return c["id"]
+        # Image-hash fallback (Hamming ≤ 10 / 64 bits, same as
+        # /admin/duplicates threshold).
+        if phash and c.get("image_phash"):
+            try:
+                a = int(phash, 16)
+                b = int(c["image_phash"], 16)
+                if bin(a ^ b).count("1") <= 10:
+                    return c["id"]
+            except ValueError:
+                pass
+    return None
+
+
 def main():
     if len(sys.argv) > 1:
         urls = [u for u in sys.argv[1:] if u.startswith("http")]
@@ -531,6 +595,19 @@ def main():
             print(f"    ✗ HTTP {code}")
             continue
         rec = extract_fields(html, url)
+        if rec:
+            # Insert-time dedup: skip when the same artwork already
+            # exists as a direct-house row.  See _find_existing_direct_match
+            # for criteria.  Operator 2026-06-30 — Do Quang Em
+            # 'Mother and Child' Bonhams 2025-03-31 ended up as TWO
+            # rows (Bonhams direct lot 844 + Invaluable mirror lot
+            # 31058) because no dedup gate fired at insert.
+            direct_id = _find_existing_direct_match(rec)
+            if direct_id:
+                print(f"    ⊘ DUP: skipping Invaluable mirror — direct "
+                      f"crawler already owns lot {direct_id}")
+                skipped += 1
+                continue
         if not rec:
             skipped += 1
             print("    ✗ no usable title")
