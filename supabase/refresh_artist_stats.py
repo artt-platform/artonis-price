@@ -64,23 +64,43 @@ for s in all_sales:
     p = s.get('price_with_premium_usd') or s.get('price_usd')
     if p is None or p <= 0: continue
     if aid not in agg:
-        agg[aid] = {'min': p, 'max': p, 'sum': 0, 'count': 0}
+        agg[aid] = {'min': p, 'max': p, 'sum': 0, 'count': 0, 'prices': []}
     a = agg[aid]
     a['min'] = min(a['min'], p)
     a['max'] = max(a['max'], p)
     a['sum'] += p
     a['count'] += 1
+    a['prices'].append(p)
 
 # Update each artist
 print(f"\nUpdating {len(agg)} artists with new aggregates...")
 ok = 0
 for aid, a in agg.items():
     avg = a['sum'] / a['count'] if a['count'] else None
+    # Q1 / median / Q3 — typical-range display for /artists list.
+    # Operator 2026-07-01: min-max spans extremes (Alix Aymé $612 to
+    # $609K, Phạm Hậu $1K to $1.24M — the low end is a real one-off
+    # sketch, the high end is a headline masterpiece).  Q1–Q3 shows
+    # the price band 50 % of the artist's paintings actually clear at,
+    # which is what operators actually want to see.
+    prices = sorted(a['prices'])
+    n = len(prices)
+    def _pct(q):
+        if n == 0: return None
+        idx = (n - 1) * q
+        lo, hi = int(idx), min(int(idx) + 1, n - 1)
+        return prices[lo] + (prices[hi] - prices[lo]) * (idx - lo)
+    q1 = _pct(0.25)
+    median = _pct(0.50)
+    q3 = _pct(0.75)
     body = {
         'auction_count': a['count'],
         'overall_min_usd': round(a['min'], 2),
         'overall_max_usd': round(a['max'], 2),
         'overall_avg_usd': round(avg, 2) if avg else None,
+        'overall_q1_usd': round(q1, 2) if q1 is not None else None,
+        'overall_median_usd': round(median, 2) if median is not None else None,
+        'overall_q3_usd': round(q3, 2) if q3 is not None else None,
     }
     r = requests.patch(f"{URL}/rest/v1/artists?id=eq.{aid}", headers={**H, 'Prefer': 'return=minimal'},
                        json=body, timeout=30)
