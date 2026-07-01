@@ -23,7 +23,7 @@ all_sales = []
 from_idx = 0
 while True:
     r = requests.get(
-        f"{URL}/rest/v1/sale_results?select=artist_id,price_usd,price_with_premium_usd,kind,status&order=id&limit=1000&offset={from_idx}",
+        f"{URL}/rest/v1/sale_results?select=artist_id,price_usd,price_with_premium_usd,price_per_m2_usd,kind,status&order=id&limit=1000&offset={from_idx}",
         headers={'apikey': KEY}, timeout=30
     )
     chunk = r.json()
@@ -64,13 +64,16 @@ for s in all_sales:
     p = s.get('price_with_premium_usd') or s.get('price_usd')
     if p is None or p <= 0: continue
     if aid not in agg:
-        agg[aid] = {'min': p, 'max': p, 'sum': 0, 'count': 0, 'prices': []}
+        agg[aid] = {'min': p, 'max': p, 'sum': 0, 'count': 0, 'prices': [], 'ppm2': []}
     a = agg[aid]
     a['min'] = min(a['min'], p)
     a['max'] = max(a['max'], p)
     a['sum'] += p
     a['count'] += 1
     a['prices'].append(p)
+    ppm2 = s.get('price_per_m2_usd')
+    if ppm2 is not None and ppm2 > 0:
+        a['ppm2'].append(ppm2)
 
 # Update each artist
 print(f"\nUpdating {len(agg)} artists with new aggregates...")
@@ -93,6 +96,17 @@ for aid, a in agg.items():
     q1 = _pct(0.25)
     median = _pct(0.50)
     q3 = _pct(0.75)
+    # Median $/m² across painting sales — needed by the /artists list
+    # 'trung vị $/m²' column and by the artist-detail page's cross-lot
+    # per-m² comparison.  Operator 2026-07-01 caught Henri Mège showing
+    # blank $/m² because the column existed on artists but no script
+    # ever populated it.
+    ppm2_sorted = sorted(a['ppm2'])
+    median_ppm2 = None
+    if ppm2_sorted:
+        m = len(ppm2_sorted)
+        median_ppm2 = (ppm2_sorted[m // 2] if m % 2
+                       else (ppm2_sorted[m // 2 - 1] + ppm2_sorted[m // 2]) / 2)
     body = {
         'auction_count': a['count'],
         'overall_min_usd': round(a['min'], 2),
@@ -101,6 +115,7 @@ for aid, a in agg.items():
         'overall_q1_usd': round(q1, 2) if q1 is not None else None,
         'overall_median_usd': round(median, 2) if median is not None else None,
         'overall_q3_usd': round(q3, 2) if q3 is not None else None,
+        'overall_median_per_m2_usd': round(median_ppm2, 2) if median_ppm2 is not None else None,
     }
     r = requests.patch(f"{URL}/rest/v1/artists?id=eq.{aid}", headers={**H, 'Prefer': 'return=minimal'},
                        json=body, timeout=30)
