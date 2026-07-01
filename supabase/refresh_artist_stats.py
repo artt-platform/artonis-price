@@ -102,11 +102,18 @@ for aid, a in agg.items():
     # blank $/m² because the column existed on artists but no script
     # ever populated it.
     ppm2_sorted = sorted(a['ppm2'])
-    median_ppm2 = None
-    if ppm2_sorted:
-        m = len(ppm2_sorted)
-        median_ppm2 = (ppm2_sorted[m // 2] if m % 2
-                       else (ppm2_sorted[m // 2 - 1] + ppm2_sorted[m // 2]) / 2)
+    # Q1 / median / Q3 for $/m² — same percentile method as USD band.
+    # Operator 2026-07-01 asked for the detail-page $/m² card to
+    # match the list-page $/m² column too; store all three so
+    # detail can read from DB instead of recomputing.
+    def _pct_ppm2(q):
+        if not ppm2_sorted: return None
+        idx = (len(ppm2_sorted) - 1) * q
+        lo, hi = int(idx), min(int(idx) + 1, len(ppm2_sorted) - 1)
+        return ppm2_sorted[lo] + (ppm2_sorted[hi] - ppm2_sorted[lo]) * (idx - lo)
+    q1_ppm2 = _pct_ppm2(0.25)
+    median_ppm2 = _pct_ppm2(0.50)
+    q3_ppm2 = _pct_ppm2(0.75)
     body = {
         'auction_count': a['count'],
         'overall_min_usd': round(a['min'], 2),
@@ -115,7 +122,9 @@ for aid, a in agg.items():
         'overall_q1_usd': round(q1, 2) if q1 is not None else None,
         'overall_median_usd': round(median, 2) if median is not None else None,
         'overall_q3_usd': round(q3, 2) if q3 is not None else None,
+        'overall_q1_per_m2_usd': round(q1_ppm2, 2) if q1_ppm2 is not None else None,
         'overall_median_per_m2_usd': round(median_ppm2, 2) if median_ppm2 is not None else None,
+        'overall_q3_per_m2_usd': round(q3_ppm2, 2) if q3_ppm2 is not None else None,
     }
     r = requests.patch(f"{URL}/rest/v1/artists?id=eq.{aid}", headers={**H, 'Prefer': 'return=minimal'},
                        json=body, timeout=30)
