@@ -23,7 +23,7 @@ all_sales = []
 from_idx = 0
 while True:
     r = requests.get(
-        f"{URL}/rest/v1/sale_results?select=artist_id,price_usd,price_with_premium_usd,kind&order=id&limit=1000&offset={from_idx}",
+        f"{URL}/rest/v1/sale_results?select=artist_id,price_usd,price_with_premium_usd,kind,status&order=id&limit=1000&offset={from_idx}",
         headers={'apikey': KEY}, timeout=30
     )
     chunk = r.json()
@@ -43,6 +43,13 @@ agg = {}
 for s in all_sales:
     aid = s.get('artist_id')
     if not aid: continue
+    # Operator rule 2026-07-01: aggregate ONLY sold lots.  Withdrawn /
+    # passed / estimate_only rows should already be excluded upstream
+    # but some (e.g. Alix Aymé Bonhams withdrawn 'Encre sur papier'
+    # rows with price_usd $108–$486 populated) leaked through and were
+    # dragging her painting-range floor to $136.
+    if s.get('status') != 'sold':
+        continue
     # Operator rule 2026-06-29: artist range ONLY counts paintings.
     # Drawings (Crayon sur papier 30×24), prints (lithograph editions),
     # sculptures (bronze busts), and medals are distinct market
