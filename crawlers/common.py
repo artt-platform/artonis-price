@@ -469,6 +469,10 @@ _LACQUER_OBJECT_KWS = (
     "lacquer cabinet",
     "boîte en laque", "boite en laque",
     "coupe en laque", "plat en laque",
+    # Operator 2026-07-01 — 'coffret en laque' (small casket / box)
+    # is a 3D lacquer object, not a paravent.  Pham Hau lot 19309
+    # ('coffret en laque', $1,620) was polluting his painting range.
+    "coffret en laque", "coffret",
 )
 
 # Drawings / sketches / works on paper sets — different market from finished oil/silk paintings
@@ -485,6 +489,24 @@ _DRAWING_KWS = (
     "ensemble de deux dessins", "ensemble de trois dessins", "ensemble de quatre dessins",
     "ensemble de cinq dessins", "ensemble de six dessins",
     "étude préparatoire", "etude préparatoire",
+)
+
+# Single-piece drawing MEDIA (pencil / charcoal / red chalk / graphite).
+# Distinguishes a sketch from a painting — Vietnamese ink or gouache
+# ON paper are actual paintings (encre sur papier, gouache sur papier
+# = painting), but Crayon / Fusain / Sanguine / Mine de plomb are
+# sketches / drawings and belong to a different market tier.
+# Operator 2026-07-01 caught Alix Aymé range polluted by \$204
+# 'Crayon sur papier Maternité' + Victor Tardieu \$387 lots that
+# classify_kind had labelled 'painting'.
+_SINGLE_DRAWING_MEDIUM_KWS = (
+    "crayon sur papier", "crayon noir", "crayons sur papier",
+    "encre et crayon sur papier", "encre et crayon sur papier calque",
+    "crayon sur papier calque",
+    "fusain sur papier", "fusain et sanguine",
+    "sanguine sur papier", "mine de plomb sur papier",
+    "pencil on paper", "graphite on paper", "charcoal on paper",
+    "red chalk on paper",
 )
 
 
@@ -590,6 +612,13 @@ def classify_kind(medium, title="", description=None, dimensions=None):
     # 3) Drawing / sketch sets — multi-piece works on paper, no canonical single dim
     for kw in _DRAWING_KWS:
         if kw in t:
+            return "drawing"
+    # 3b) Single-piece drawings — pencil/charcoal/red-chalk on paper.
+    # Match against MEDIUM (m) not just title so 'Crayon sur papier'
+    # in the medium field promotes the row to drawing regardless of
+    # the artwork's title.  Operator 2026-07-01.
+    for kw in _SINGLE_DRAWING_MEDIUM_KWS:
+        if kw in m:
             return "drawing"
     # 4) Print: medium keyword OR title indicates reproduction
     for kw in _PRINT_MEDIUM_KWS:
